@@ -377,6 +377,19 @@ What the study does establish is the direction of the lean, and that the archite
 reading of its own dimensions was the wrong way round. That is worth more than any prompt
 rewording, and it is the honest ceiling of what this data can tell us.
 
+## Running it on a server
+
+```bash
+make economics EQUITY=1000     # what it could make, what it costs, how long to prove it
+```
+
+**Do not run the model on the server.** A GPU host that serves a 7B model at usable speed costs
+$200-700/month; the same work through a cheap hosted API is about **$0.01-0.30/month** at 22 gated
+calls a day. Run a $5-12/month VPS for the bot and call the API. Use `--broker alpaca` on a server
+specifically because the brackets live on Alpaca's side and survive the process dying, which the
+memory-resident sim broker does not. Full walkthrough including the systemd unit:
+[docs/remote.md](docs/remote.md).
+
 ## Honest limits
 
 - **A profitable-looking replay is not evidence of edge.** These runs cover single sessions with

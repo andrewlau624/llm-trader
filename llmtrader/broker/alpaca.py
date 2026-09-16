@@ -210,15 +210,22 @@ class AlpacaBroker:
                 "refusing to submit outside regular trading hours: a DAY order placed now "
                 "could fill at the next open at a price unrelated to this decision"
             )
-        qty = max(1, int(size))
+        base_price = None
         try:
             base_price = self.live_price(symbol)
         except Exception as e:
-            base_price = None
             self.events.append(
                 {"event": "live_price_unavailable", "error": str(e)[:200],
-                 "ts": (now or datetime.now(timezone.utc)).isoformat()}
+                 "ts": now.isoformat()}
             )
+        if base_price and size < 1.0:
+            raise BrokerError(
+                f"position size is {size:.3f} shares but Alpaca bracket orders only accept whole "
+                f"shares, and rounding up to 1 share would be ${base_price:,.0f} of notional "
+                f"({base_price / self.book.equity * 100:.0f}% of equity). Raise max_notional_pct "
+                f"deliberately if that is what you intend, or fund the account further."
+            )
+        qty = max(1, int(size))
         problems = bracket_problems(
             decision.action, decision.stop_loss, decision.take_profit, base_price
         )

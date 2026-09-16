@@ -36,6 +36,7 @@ class Decision:
     latency_ms: int = 0
     prompt_tokens: int = None
     completion_tokens: int = None
+    regime: str = ""
     parse_ok: bool = True
     semantic_ok: bool = True
     parse_error: str = ""
@@ -138,8 +139,12 @@ class Trader:
         self.cfg = cfg
         self.logger = logger
 
-    def build_prompt(self, ctx, account=None, recent=None, extra=None):
-        dashboard = render_dashboard(ctx, account=account, recent=recent, cfg=self.cfg)
+    def build_prompt(self, ctx, account=None, recent=None, extra=None, scored=None,
+                     feedback=None):
+        dashboard = render_dashboard(
+            ctx, account=account, recent=recent, cfg=self.cfg, scored=scored,
+            feedback=feedback,
+        )
         user = build_user_prompt(
             dashboard,
             min_confidence=self.cfg.min_confidence,
@@ -181,8 +186,10 @@ class Trader:
             )
         return problems
 
-    def decide(self, ctx, account=None, recent=None, extra=None):
-        dashboard, user = self.build_prompt(ctx, account, recent, extra)
+    def decide(self, ctx, account=None, recent=None, extra=None, scored=None, feedback=None):
+        dashboard, user = self.build_prompt(
+            ctx, account, recent, extra, scored=scored, feedback=feedback
+        )
         last_err = None
         last_kind = "parse"
         for attempt in range(1, self.cfg.llm_retries + 2):

@@ -4,8 +4,10 @@ from .broker.base import BrokerError
 from .config import Config
 from .context import build_context
 from .data.base import ET, to_utc
+from .feedback import trade_feedback
 from .gate import should_call_llm
 from .news import build_news
+from .scorer import score_context
 from .trader import Decision, Trader
 
 
@@ -152,9 +154,14 @@ class Engine:
             return {"ctx": ctx, "decision": skipped, "checks": checks, "account": account}
 
         news_notes = self.news.notes(ctx.now) if self.news else []
+        scored = score_context(ctx, getattr(ctx, "frames", None))
+        ctx.scored = scored
+        feedback = trade_feedback(trades, day=ctx.now.astimezone(ET).date())
         decision, dashboard = self.trader.decide(
-            ctx, account=account, recent=recent, extra=news_notes or None
+            ctx, account=account, recent=recent, extra=news_notes or None,
+            scored=scored, feedback=feedback,
         )
+        decision.regime = ctx.regime
         checks = risk.check(decision, ctx, account, self.cfg)
         self.journal.log_decision(
             ctx.now, ctx, dashboard, decision, checks, account, extra={"gate": gate_notes}

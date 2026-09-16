@@ -49,7 +49,7 @@ class AlpacaBroker:
         self.client = TradingClient(self.api_key, self.secret_key, paper=True)
         self.data_client = None
         self.cfg = cfg
-        self.book = account or LocalAccount(cfg.equity)
+        self.book = account or LocalAccount(cfg.equity, authoritative_equity=True)
         self.open_entry = None
         self.trades = []
         self.events = []
@@ -75,10 +75,8 @@ class AlpacaBroker:
         if self.book.day != et.date():
             acct = self._api_account()
             equity = float(acct.equity)
+            self.book.set_balance(equity)
             self.book.start_day(et.date(), equity=equity)
-            self.book.start_equity = equity
-            self.book.realized_pnl = self.book.realized_pnl
-            self.book.equity = equity
 
     def _open_position(self):
         try:
@@ -104,6 +102,7 @@ class AlpacaBroker:
             opened_at=opened,
             confidence=(self.open_entry or {}).get("confidence", 0),
             rationale=(self.open_entry or {}).get("rationale", ""),
+            regime=(self.open_entry or {}).get("regime", ""),
             max_hold_min=(self.open_entry or {}).get("max_hold_min", self.cfg.max_hold_min),
         )
 
@@ -193,6 +192,7 @@ class AlpacaBroker:
             confidence=entry_info.get("confidence", 0),
             rationale=entry_info.get("rationale", ""),
             hold_min=int((now - opened_at).total_seconds() // 60),
+            regime=entry_info.get("regime", ""),
         )
 
     def submit(self, decision, size, now=None):
@@ -258,6 +258,7 @@ class AlpacaBroker:
             "take_profit": decision.take_profit,
             "confidence": decision.confidence,
             "rationale": decision.thesis,
+            "regime": decision.regime,
             "max_hold_min": decision.max_hold_minutes,
             "opened_at": to_utc(now or datetime.now(timezone.utc)),
         }
@@ -287,14 +288,10 @@ class AlpacaBroker:
     def account_state(self, price=None):
         try:
             acct = self._api_account()
-            equity = float(acct.equity)
-            self.book.equity = equity
+            self.book.set_balance(float(acct.equity))
         except Exception:
-            equity = self.book.equity
-        pos = self.book.position
-        if pos is not None and price is not None:
-            self.book.mark(price)
-        return self.book.snapshot(price)
+            self.book.refresh_day_pnl()
+        return self.book.snapshot()
 
     def forced_exit_due(self, now, price):
         pos = self.book.position

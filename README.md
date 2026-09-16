@@ -231,6 +231,92 @@ Still unverified: the fill → `sync()` → trade-recording path, because it nee
 market was closed when this was built. That is the one thing to watch on the first live session —
 `runs/<run>/events.jsonl` will show `exit_*` events if it is working.
 
+## Against the reference architecture
+
+This project was built from a Reddit description of the setup, not from the author's architecture
+document. Reading that document afterwards, the honest diff is: I matched the outer shape and
+missed the component that makes it work, and I broke two of its stated rules.
+
+| Reference architecture | Here |
+|---|---|
+| Dashboard as formatted text, not JSON | same |
+| Drop the in-progress bar, dedup by completed timestamp | same |
+| Multi-timeframe bars (15 primary / 15 short / 12 long) | same |
+| EMA 9/21/50, RSI 14, MACD 12/26/9, ATR 14, BB 20/2σ, VWAP, regime | same |
+| Session-aware volume vs time-of-day bucket | same |
+| **No post-decision AI review — brackets manage exits** | same |
+| **7 continuous scored dimensions** | **missing until now** — see below |
+| IQR outlier removal in the volume baseline | now added |
+| Classic pivot points | now added |
+| Structured trade feedback with pattern detection | now added |
+| GEX overlay, omitted when stale | not built (optional in the reference too) |
+
+### The missing scorer was the actual bug
+
+The reference does not send raw indicator tables and hope the model synthesises a view. It
+publishes continuous scores — Trend and Momentum on −100..+100 with labels, Mean Reversion 0..100
+*with a snap direction*, Volatility and Volume as labels, plus S/R proximity in ATR units. The
+model then spends its capacity deciding instead of recomputing.
+
+Without those, my model had to invent the synthesis every tick, and it made mistakes that looked
+like a reasoning failure but were really a missing input. Before the scorer, three of four trades
+were `enter_long` carrying a thesis that read "5m bearish setup", "EMAs bearish, ADX confirms trend
+down", "price near session low" — buying while describing a decline. I patched that with a
+counter-trend confidence floor, which is the thing the reference explicitly argues against:
+
+> *"Why no trend guard or hard gates? The AI already sees the trend score. A hard gate that blocks
+> counter-trend trades also blocks valid mean reversion entries. Trust the AI's synthesis."*
+
+They are right, and the fix was not the gate — it was the input. With the Mean Reversion dimension
+and its snap direction in the prompt, the same session produces:
+
+```
+19:15  trend_down  enter_long   conf 9   "Trend is bearish but MeanRev is extremely stretched,
+                                         suggesting a mean-reversion setup. The price is below
+                                         the session VWAP and near pivot_S2."
+19:20  trend_down  enter_short  conf 9   "Trend is strongly bearish with ADX at 35, EMA stack in
+                                         bear order, and price rejecting VWAP from below."
+```
+
+Two decisions, both internally coherent, one of each direction, each naming the evidence. The
+contradiction is gone, and neither needed a gate to produce. That is the difference between a
+model that cannot see the mean-reversion case and a model that can.
+
+### Gate A/B, same session, same model
+
+`make backtest GATE=1` vs `GATE=0`, both with the scorer in place:
+
+| | gate ON | gate OFF |
+|---|---|---|
+| LLM calls | 22 | 76 |
+| gated out | 51 | 0 |
+| in-position skips | 3 | 0 |
+| non-hold decisions | 2 | 1 |
+| trades | 1 | 0 |
+| total R | −0.53 | 0.00 |
+| avg latency | 4.1 s | 14.3 s |
+| wall clock | 6.5 min | 19 min |
+
+The gate saved 54 calls and two thirds of the wall clock, and on this day cost no signal — the
+un-gated run proposed *fewer* trades (1 vs 2), and the one extra gated-in entry lost money. One
+session proves nothing, but it does show the gate is not the signal-destroying filter the reference
+warns about, at least not at these thresholds.
+
+### The one rule I still knowingly break
+
+**Balance-delta P&L.** The reference insists account balance is the only number that is always
+correct, and that trade sums miss commissions, slippage and prior-session fills. It was right:
+`day_pnl` now derives from equity minus the day's opening balance, so the daily loss halt fires on
+real drawdown — including unrealized drawdown on an open position — rather than on my own
+bookkeeping. Their own log shows why this matters: a single position's P&L was corrected from
+−$773.92 to −$1,158.64 when the balance was consulted. A 50% miss on one trade is more than enough
+to walk through a daily loss limit unnoticed.
+
+What is *not* copied: I still keep `max_hold_minutes` as a time stop (the reference relies purely on
+the SL/TP brackets), and my schema uses absolute prices rather than ticks, because equities. Both
+are deliberate, and the time stop is worth watching — in the pre-scorer runs, half of all exits were
+`max_hold` rather than target, which is a sign the targets are set beyond what the market delivers.
+
 ## Honest limits
 
 - **A profitable-looking replay is not evidence of edge.** These runs cover single sessions with
@@ -247,6 +333,9 @@ market was closed when this was built. That is the one thing to watch on the fir
   Reddit setup used a home-built GEX calculator from delayed options data; that is not here yet.
 - The Alpaca paper path is verified for account reads, order submission, bracket-leg validation and
   cancellation. The fill → close → `sync()` → trade-journal path has not yet run against a real fill.
+- The scored dimensions are hand-tuned composites, not fitted weights. They are interpretable on
+  purpose, but they are my numbers, not the reference implementation's, and no one has validated
+  that they rank setups in the right order.
 - A model that reads "session VWAP" and "call wall" the same way you do is an assumption. Read the
   `thesis` field in `decisions.jsonl` and decide for yourself whether the reasoning is sound — that
   is the real output of this project.
@@ -258,13 +347,15 @@ llmtrader/
   config.py        dataclass config, .env loader
   data/base.py     Bar, resampling, session/time helpers
   data/feeds.py    yfinance and Alpaca bar feeds with an optional frozen cache
-  context/         indicators.py, engine.py (context + regime + key levels)
+  context/         indicators.py, engine.py (context, regime, key levels, floor pivots)
+  scorer.py        7 continuous dimensions: trend, momentum, mean reversion + snap, vol, volume, S/R
+  feedback.py      intra-session results: losing streaks, directional bias, repeated failures
   dashboard.py     context -> prompt text
   prompts.py       system prompt + decision JSON schema
   llm/             ollama / openai-compatible clients, mock client
   trader.py        parsing, semantic validation, retry loop
   risk.py          the deterministic gate and position sizing
-  gate.py          when is the context worth waking the LLM for
+  gate.py          when is the context worth waking the LLM for (the A/B above says it is cheap)
   news.py          RSS headlines as extra prompt context
   broker/          sim (bar-driven fills), alpaca paper, local accounting
   journal.py       JSONL run logging

@@ -30,7 +30,12 @@ def make_bars(count=120, start_et=(9, 30), day=(2026, 9, 16), start_price=100.0,
 
 def make_tf(tf="5m", atr=1.0, price=100.0, adx=30.0, rsi=55.0, rel_vol=1.0, zscore=0.0,
             structure="hh_hl", ema_stack="bull", macd_hist=0.01, bb_width_pct=0.3,
-            bb_pctb=0.6, slope_pct=0.01, trend_r2=0.6):
+            bb_pctb=0.6, slope_pct=0.01, trend_r2=0.6, roc=0.2, plus_di=None,
+            minus_di=None, ema50=None):
+    if plus_di is None:
+        plus_di, minus_di = (12.0, 25.0) if ema_stack == "bear" else (25.0, 12.0)
+    if ema50 is None:
+        ema50 = price + 0.2 if ema_stack == "bear" else price - 0.2
     return TFContext(
         tf=tf,
         bars=15,
@@ -38,20 +43,20 @@ def make_tf(tf="5m", atr=1.0, price=100.0, adx=30.0, rsi=55.0, rel_vol=1.0, zsco
         net_change_pct=0.1,
         ema9=price,
         ema21=price - 0.1,
-        ema50=price - 0.2,
+        ema50=ema50,
         ema_stack=ema_stack,
         slope_pct=slope_pct,
         trend_r2=trend_r2,
         adx=adx,
-        plus_di=25.0,
-        minus_di=12.0,
+        plus_di=plus_di,
+        minus_di=minus_di,
         rsi=rsi,
         stoch_k=55.0,
         stoch_d=52.0,
         macd=0.05,
         macd_signal=0.04,
         macd_hist=macd_hist,
-        roc=0.2,
+        roc=roc,
         bb_pctb=bb_pctb,
         bb_width_pct=bb_width_pct,
         atr=atr,

@@ -18,6 +18,7 @@ class Position:
     confidence: int = 0
     rationale: str = ""
     max_hold_min: int = 240
+    regime: str = ""
 
     def unrealized(self, price):
         direction = 1.0 if self.side == "long" else -1.0
@@ -52,6 +53,7 @@ class Trade:
     max_favorable: float = 0.0
     max_adverse: float = 0.0
     hold_min: int = 0
+    regime: str = ""
 
     def to_dict(self):
         d = dict(self.__dict__)

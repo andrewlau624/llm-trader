@@ -157,3 +157,46 @@ def test_force_close_records_trade(cfg):
     assert trade.exit_reason == "replay_end"
     assert trade.pnl == 10.0
     assert broker.account.position is None
+
+
+def test_day_pnl_is_balance_delta_not_trade_sum(cfg):
+    """A trade sum can be wrong; the account balance cannot. day_pnl must follow the balance."""
+    acct = LocalAccount(100000)
+    acct.start_day("2026-09-16", 100000)
+    broker = SimBroker(cfg, account=acct)
+    broker.submit(long_decision(stop=99.0, tp=103.0), 10,
+                  datetime(2026, 9, 16, 13, 30, tzinfo=timezone.utc))
+    broker.process_bar(bar(0, 100, 100.5, 99.9, 100.2))
+    assert acct.day_pnl == 0.0
+    assert acct.mark(101.0) == 100010.0
+    assert acct.day_pnl == 10.0
+    broker.process_bar(bar(1, 100.2, 103.5, 100.1, 103.2))
+    assert acct.day_pnl == 30.0
+    assert acct.realized_pnl == 30.0
+
+
+def test_daily_halt_follows_the_balance_even_with_no_closed_trades(cfg):
+    """Unrealized drawdown on an open position must still move the daily loss halt."""
+    from llmtrader.risk import update_halt
+
+    acct = LocalAccount(100000)
+    acct.start_day("2026-09-16", 100000)
+    broker = SimBroker(cfg, account=acct)
+    broker.submit(long_decision(stop=50.0, tp=200.0), 100,
+                  datetime(2026, 9, 16, 13, 30, tzinfo=timezone.utc))
+    broker.process_bar(bar(0, 100, 100.5, 99.9, 100.2))
+    assert not acct.halted
+    acct.mark(90.0)
+    update_halt(acct, cfg)
+    assert acct.halted
+    assert "daily loss limit" in acct.halt_reason
+
+
+def test_authoritative_balance_is_not_overwritten_by_marks(cfg):
+    acct = LocalAccount(100000, authoritative_equity=True)
+    acct.start_day("2026-09-16", 100000)
+    acct.set_balance(100250.0)
+    assert acct.day_pnl == 250.0
+    acct.mark(50.0)
+    assert acct.equity == 100250.0
+    assert acct.day_pnl == 250.0

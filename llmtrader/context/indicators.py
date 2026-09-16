@@ -231,6 +231,18 @@ def swing_structure(bars, lookback=6):
     return "range"
 
 
+def iqr_filter(values, k=1.5):
+    vals = sorted(v for v in values if v is not None and v > 0)
+    if len(vals) < 4:
+        return vals
+    q1 = vals[len(vals) // 4]
+    q3 = vals[(3 * len(vals)) // 4]
+    spread = q3 - q1
+    lo, hi = q1 - k * spread, q3 + k * spread
+    kept = [v for v in vals if lo <= v <= hi]
+    return kept or vals
+
+
 def percentile_rank(values, value):
     if not values:
         return None

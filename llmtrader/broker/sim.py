@@ -50,6 +50,7 @@ class SimBroker:
                 confidence=decision.confidence,
                 rationale=decision.thesis,
                 max_hold_min=decision.max_hold_minutes,
+                regime=decision.regime,
             )
         )
         self.pending = None
@@ -100,6 +101,7 @@ class SimBroker:
             max_favorable=getattr(pos, "max_mfe", 0.0),
             max_adverse=getattr(pos, "max_mae", 0.0),
             hold_min=int((to_utc(ts) - to_utc(pos.opened_at)).total_seconds() // 60),
+            regime=pos.regime,
         )
         self.account.close_position(trade)
         update_halt(self.account, self.cfg)
@@ -114,6 +116,8 @@ class SimBroker:
         )
 
     def snapshot(self, price=None):
+        if price is None and self.account.position is not None:
+            price = self.account.position.entry
         return self.account.snapshot(price)
 
     def force_close(self, price, ts, reason="forced"):

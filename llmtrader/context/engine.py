@@ -169,11 +169,12 @@ def session_context(bars_1m, now):
     prev_close = prev["close"] if prev else agg["open"]
     elapsed = max(1, minutes_from_open(now))
     history = []
-    for d in prev_days[-5:]:
+    for d in prev_days[-10:]:
         cum = sum(b.volume for b in by_day[d] if 0 <= minutes_from_open(b.ts) < elapsed)
         if cum > 0:
             history.append(cum)
-    expected = sum(history) / len(history) if history else agg["volume"]
+    kept = ind.iqr_filter(history)
+    expected = sum(kept) / len(kept) if kept else agg["volume"]
     return SessionContext(
         session_open=_round(agg["open"]),
         session_high=_round(agg["high"]),
@@ -261,6 +262,18 @@ def classify_regime(tfs, session):
     return regime, notes
 
 
+def floor_pivots(high, low, close):
+    if None in (high, low, close):
+        return []
+    pp = (high + low + close) / 3.0
+    r1 = 2 * pp - low
+    s1 = 2 * pp - high
+    r2 = pp + (high - low)
+    s2 = pp - (high - low)
+    return [("pivot_PP", pp), ("pivot_R1", r1), ("pivot_S1", s1),
+            ("pivot_R2", r2), ("pivot_S2", s2)]
+
+
 def key_levels(session, price):
     levels = []
     if session:
@@ -273,6 +286,7 @@ def key_levels(session, price):
             ("premarket_high", session.premarket_high),
             ("premarket_low", session.premarket_low),
         ]
+        levels += floor_pivots(session.prev_high, session.prev_low, session.prev_close)
     for step in (1, 5):
         levels.append((f"round_{step}", round(price / step) * step))
     seen, out = set(), []
@@ -312,7 +326,7 @@ def build_context(symbol, bars_1m, now, timeframes=("1m", "5m", "1h"), prebuilt=
     sess = session_context(base, now)
     price = base[-1].close if base else bars_1m[-1].close
     regime, notes = classify_regime(tfs, sess)
-    return MarketContext(
+    ctx = MarketContext(
         symbol=symbol,
         now=now,
         price=_round(price),
@@ -323,3 +337,5 @@ def build_context(symbol, bars_1m, now, timeframes=("1m", "5m", "1h"), prebuilt=
         key_levels=key_levels(sess, price),
         cross_market=extra or {},
     )
+    ctx.frames = frames
+    return ctx

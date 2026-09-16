@@ -1,0 +1,59 @@
+# llm-trader configuration. Every value here overrides the defaults in llmtrader/config.py
+
+# what to trade
+symbols: [SPY]
+extra_context_symbols: [QQQ, IWM, VIXY]
+decision_interval_min: 5
+timeframes: [1m, 5m, 1h]
+bars_per_timeframe: 15
+
+# data source: yfinance (free, 1m bars for the last 7 days) or alpaca (needs keys, IEX feed)
+data_source: yfinance
+bar_feed: iex
+
+# llm backend: ollama (local, free) | deepseek (cheap api key) | opencode-go (your subscription)
+llm_backend: ollama
+ollama_host: http://localhost:11434
+ollama_model: qwen2.5:7b
+llm_temperature: 0.2
+llm_timeout_s: 180
+llm_retries: 2
+call_llm_when_halted: false
+call_llm_in_position: false
+
+# only wake the LLM when the context looks actionable (big token/time saving)
+llm_gate: false
+gate_min_adx: 25.0
+gate_min_relvol: 1.5
+gate_min_bbwidth: 0.25
+gate_min_abs_zscore: 1.5
+gate_min_vwap_dist: 0.25
+gate_min_session_rvol: 1.4
+
+# trade acceptance thresholds
+min_confidence: 6
+min_reward_risk: 1.5
+max_entry_slip_pct: 0.15
+require_stop: true
+allow_shorts: true
+
+# risk
+equity: 100000
+risk_per_trade_pct: 0.25
+max_notional_pct: 10.0
+max_trades_per_day: 6
+max_daily_loss_pct: 1.0
+max_consecutive_losses: 3
+min_confidence_after_losses: 8
+no_entry_first_min: 5
+no_entry_last_min: 10
+max_hold_min: 240
+
+# simulated fills (replay + sim paper)
+commission_per_share: 0.0
+slippage_bps: 1.5
+fill_at: next_bar_open
+
+# logging
+journal_dir: runs
+log_raw_responses: true

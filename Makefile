@@ -1,0 +1,110 @@
+# llm-trader - one-word commands.
+#
+#   make              list every command
+#   make setup        create the venv and install deps
+#   make check        verify python, ollama, model, keys, and today's data
+#   make test         run the test suite
+#
+#   make replay       replay one past session (DATE=YYYY-MM-DD)
+#   make backtest     replay the last N sessions (DAYS=5)
+#   make report       summarise every run so far
+#
+#   make paper        paper loop: live data, simulated fills, no account needed
+#   make once         one decision cycle right now, then exit
+#   make live         paper loop against your Alpaca paper account
+#   make stop         stop background runs
+
+SHELL   := /bin/bash
+APP_DIR := $(CURDIR)
+PY      := $(APP_DIR)/.venv/bin/python
+UV      := uv
+
+SYMBOL   ?= SPY
+MODEL    ?= qwen2.5:7b
+BACKEND  ?= ollama
+DATE     ?=
+DAYS     ?= 5
+INTERVAL ?= 5
+GATE     ?= 1
+
+REPLAY_FLAGS = $(if $(DATE),--date $(DATE),--days $(DAYS)) --symbol $(SYMBOL) \
+               --model $(MODEL) --backend $(BACKEND) --interval $(INTERVAL) \
+               $(if $(filter 1,$(GATE)),--gate,)
+
+.DEFAULT_GOAL := help
+.PHONY: help setup check test lint fmt replay backtest report paper once live stop status logs clean
+
+help:
+	@echo ""
+	@echo "  llm-trader"
+	@echo "  ------------------------------------------------------------------"
+	@echo "  make setup       create .venv and install dependencies"
+	@echo "  make check       verify environment, data and model availability"
+	@echo "  make test        run the unit tests"
+	@echo "  make lint        static checks (ruff)"
+	@echo ""
+	@echo "  make replay      replay one session     e.g. make replay DATE=2026-09-16"
+	@echo "  make backtest    replay N sessions      e.g. make backtest DAYS=5 GATE=0"
+	@echo "  make report      summarise all runs, win rate and R multiples"
+	@echo ""
+	@echo "  make paper       paper loop, simulated fills, live data, no account"
+	@echo "  make once        one decision cycle now, then exit"
+	@echo "  make live        paper loop against Alpaca paper (needs .env keys)"
+	@echo "  make status      is it running, what has it done, what does it hold"
+	@echo "  make stop        stop any background runs"
+	@echo ""
+	@echo "  MODEL=$(MODEL)  SYMBOL=$(SYMBOL)  GATE=$(GATE)  DAYS=$(DAYS)"
+	@echo "  e.g.  make backtest DAYS=5 MODEL=qwen2.5:7b GATE=1"
+	@echo ""
+
+setup:
+	@test -d .venv || $(UV) venv --python 3.13 .venv
+	$(UV) pip install --python $(PY) -r requirements.txt
+	@echo "done. copy .env.example to .env if you want Alpaca paper keys"
+
+check:
+	@$(PY) scripts/check.py
+
+test:
+	$(PY) -m pytest -q
+
+lint:
+	$(PY) -m ruff check .
+
+fmt:
+	$(PY) -m ruff check . --fix
+
+replay:
+	$(PY) scripts/replay.py $(REPLAY_FLAGS) --tag "$(SYMBOL)-$(DATE)$(DAYS)d"
+
+backtest:
+	$(PY) scripts/replay.py $(REPLAY_FLAGS) --tag "$(SYMBOL)-$(DAYS)d"
+
+report:
+	@$(PY) scripts/report.py
+
+status:
+	@$(PY) scripts/status.py
+
+paper:
+	$(PY) scripts/live.py --broker sim --symbol $(SYMBOL) --model $(MODEL) \
+		--backend $(BACKEND) --interval $(INTERVAL) $(if $(filter 1,$(GATE)),--gate,)
+
+once:
+	$(PY) scripts/live.py --broker sim --symbol $(SYMBOL) --model $(MODEL) \
+		--backend $(BACKEND) --once $(if $(filter 1,$(GATE)),--gate,)
+
+live:
+	$(PY) scripts/live.py --broker alpaca --symbol $(SYMBOL) --model $(MODEL) \
+		--backend $(BACKEND) --interval $(INTERVAL) $(if $(filter 1,$(GATE)),--gate,)
+
+stop:
+	@pkill -f "scripts/live.py" || true
+	@pkill -f "scripts/replay.py" || true
+	@echo "stopped"
+
+logs:
+	@ls -t runs | head -1 | xargs -I{} tail -f runs/{}/decisions.jsonl
+
+clean:
+	rm -rf runs .pytest_cache data/cache

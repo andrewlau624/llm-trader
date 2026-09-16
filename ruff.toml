@@ -1,0 +1,19 @@
+line-length = 100
+target-version = "py310"
+
+[lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "FURB", "PLR", "DTZ"]
+ignore = [
+    "PLR0912",
+    "PLR0915",
+    "PLR2004",
+    "RUF012",
+    "PLR0911",
+    "PLR0913",
+    "PLR0917",
+]
+
+[lint.per-file-ignores]
+"tests/*" = ["PLR", "RUF059", "E501", "E741"]
+"llmtrader/prompts.py" = ["E501"]
+"llmtrader/dashboard.py" = ["E501"]

@@ -1,0 +1,12 @@
+# Core
+requests>=2.31
+pyyaml>=6.0
+
+# Historical bars for replay (yfinance gives 1m data for the last ~7 days)
+yfinance>=0.2.40
+
+# Live paper broker + market data (SPY/QQQ on the free IEX feed)
+alpaca-py>=0.30.0
+
+# Dev
+pytest>=7.4

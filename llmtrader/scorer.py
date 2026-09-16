@@ -325,12 +325,22 @@ def score_context(ctx, frames=None):
     sr_name, sr_price, sr_dist = _sr(ctx)
 
     trend_note = ""
-    c5 = ctx.timeframes.get("5m")
+    c5 = ctx.timeframes.get("5m") or ctx.timeframes.get("1m")
     if c5 is not None:
-        trend_note = f"5m adx {c5.adx:.0f}, ema stack {c5.ema_stack}" if c5.adx else ""
+        bits = []
+        if c5.adx is not None:
+            bits.append(f"adx {c5.adx:.0f}")
+        if c5.ema_stack:
+            bits.append(f"ema stack {c5.ema_stack}")
+        trend_note = (c5.tf + ": " + ", ".join(bits)) if bits else ""
     momentum_note = ""
-    if c5 is not None and c5.roc is not None:
-        momentum_note = f"5m roc {c5.roc:+.2f}%, macd hist {c5.macd_hist:+.4f}"
+    if c5 is not None:
+        bits = []
+        if c5.roc is not None:
+            bits.append(f"roc {c5.roc:+.2f}%")
+        if c5.macd_hist is not None:
+            bits.append(f"macd hist {c5.macd_hist:+.4f}")
+        momentum_note = (c5.tf + ": " + ", ".join(bits)) if bits else ""
 
     return ScoredContext(
         trend=_round(trend, 1),

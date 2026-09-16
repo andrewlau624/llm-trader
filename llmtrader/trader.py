@@ -140,10 +140,10 @@ class Trader:
         self.logger = logger
 
     def build_prompt(self, ctx, account=None, recent=None, extra=None, scored=None,
-                     feedback=None):
+                     feedback=None, gex=None):
         dashboard = render_dashboard(
             ctx, account=account, recent=recent, cfg=self.cfg, scored=scored,
-            feedback=feedback,
+            feedback=feedback, gex=gex,
         )
         user = build_user_prompt(
             dashboard,
@@ -186,9 +186,10 @@ class Trader:
             )
         return problems
 
-    def decide(self, ctx, account=None, recent=None, extra=None, scored=None, feedback=None):
+    def decide(self, ctx, account=None, recent=None, extra=None, scored=None, feedback=None,
+               gex=None):
         dashboard, user = self.build_prompt(
-            ctx, account, recent, extra, scored=scored, feedback=feedback
+            ctx, account, recent, extra, scored=scored, feedback=feedback, gex=gex
         )
         last_err = None
         last_kind = "parse"

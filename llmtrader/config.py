@@ -67,6 +67,16 @@ class Config:
     call_llm_when_halted: bool = False
     call_llm_in_position: bool = False
 
+    include_empirical_priors: bool = True
+    include_raw_bars: bool = True
+    raw_bar_counts: dict = field(default_factory=lambda: {"1m": 15, "5m": 15, "1h": 12})
+
+    gex_enabled: bool = True
+    gex_symbol: str = ""
+    gex_max_expiries: int = 3
+    gex_min_oi: int = 100
+    gex_max_age_min: int = 30
+
     news_urls: list = field(default_factory=list)
     news_lookback_min: int = 180
     news_max_items: int = 6

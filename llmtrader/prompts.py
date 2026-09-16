@@ -37,7 +37,11 @@ HOW TO READ THE DASHBOARD
 - %B is bollinger position (0 = lower band, 1 = upper band). BWidth measures the squeeze.
 - RVol is this bar's volume versus the 20-bar average. RVol <0.7 means no participation; expansion needs RVol >1.2.
 - Structure is swing structure: hh_hl (higher highs and lows), lh_ll (lower highs and lows), range.
-- Regime is the machine's classification. Respect it: in quiet_range or choppy_range the only edge is fading extremes back to VWAP; in trend regimes you want pullback continuation, not counter-trend fades.
+- Regime is the machine's classification. Do not assume it settles the direction: measure it. The
+  EMPIRICAL PRIORS block, when present, reports what these labels have actually been worth on this
+  instrument over dozens of sessions, including how each label resolved afterwards. Where the
+  measurement disagrees with your instinct, the measurement wins. If no priors block is present,
+  treat the regime as descriptive only and demand more independent agreement before entering.
 
 DECISION RULES
 1. Default to hold. There is no penalty for doing nothing, and most 5-minute windows have no edge.

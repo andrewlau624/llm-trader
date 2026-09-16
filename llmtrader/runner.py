@@ -6,6 +6,7 @@ from .context import build_context
 from .data.base import ET, to_utc
 from .feedback import trade_feedback
 from .gate import should_call_llm
+from .gex import fetch_gex
 from .news import build_news
 from .scorer import score_context
 from .trader import Decision, Trader
@@ -155,11 +156,21 @@ class Engine:
 
         news_notes = self.news.notes(ctx.now) if self.news else []
         scored = score_context(ctx, getattr(ctx, "frames", None))
+        gex = None
+        if self.cfg.gex_enabled:
+            gex = fetch_gex(
+                self.cfg.gex_symbol or self.cfg.symbols[0],
+                spot=ctx.price,
+                max_expiries=self.cfg.gex_max_expiries,
+                min_oi=self.cfg.gex_min_oi,
+                cache_age_s=max(60, self.cfg.gex_max_age_min * 30),
+            )
+        scored.gex = gex
         ctx.scored = scored
         feedback = trade_feedback(trades, day=ctx.now.astimezone(ET).date())
         decision, dashboard = self.trader.decide(
             ctx, account=account, recent=recent, extra=news_notes or None,
-            scored=scored, feedback=feedback,
+            scored=scored, feedback=feedback, gex=gex,
         )
         decision.regime = ctx.regime
         checks = risk.check(decision, ctx, account, self.cfg)

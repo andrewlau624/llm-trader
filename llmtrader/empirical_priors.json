@@ -1,0 +1,99 @@
+{
+  "symbol": "SPY",
+  "granularity": "5m",
+  "sessions": 60,
+  "windows": 3940,
+  "horizon_min": 60,
+  "cost_bps": 2.0,
+  "generated_at": "2026-09-16T23:11:39.240972+00:00",
+  "first_half": [
+    "2026-06-23",
+    "2026-08-04"
+  ],
+  "second_half": [
+    "2026-08-05",
+    "2026-09-16"
+  ],
+  "labels": {
+    "STRONG_BULL": {
+      "n": 251,
+      "excess_bps": -6.68,
+      "t": -6.01,
+      "win": 33.9
+    },
+    "BULL": {
+      "n": 1264,
+      "excess_bps": -3.83,
+      "t": -7.63,
+      "win": 40.2
+    },
+    "NEUTRAL": {
+      "n": 1137,
+      "excess_bps": 0.18,
+      "t": 0.29,
+      "win": 49.1
+    },
+    "BEAR": {
+      "n": 1060,
+      "excess_bps": 4.69,
+      "t": 7.39,
+      "win": 60.0
+    },
+    "STRONG_BEAR": {
+      "n": 228,
+      "excess_bps": 5.88,
+      "t": 4.61,
+      "win": 63.2
+    }
+  },
+  "rules": [
+    {
+      "n": 283,
+      "excess_bps": 9.39,
+      "t": 6.13,
+      "name": "fade adx>25 with volume>1.2",
+      "h1": 14.28,
+      "h2": 4.4
+    },
+    {
+      "n": 292,
+      "excess_bps": 5.33,
+      "t": 3.62,
+      "name": "MR>70 snap DOWN -> short",
+      "h1": 5.35,
+      "h2": 5.29
+    },
+    {
+      "n": 784,
+      "excess_bps": -5.02,
+      "t": -6.9,
+      "name": "follow BEAR + momentum DOWN",
+      "h1": -7.31,
+      "h2": -3.16
+    },
+    {
+      "n": 789,
+      "excess_bps": -4.54,
+      "t": -6.92,
+      "name": "follow BULL + momentum UP",
+      "h1": -4.56,
+      "h2": -4.51
+    },
+    {
+      "n": 462,
+      "excess_bps": 4.44,
+      "t": 4.59,
+      "name": "volatility HIGH -> long",
+      "h1": 6.12,
+      "h2": 2.6
+    },
+    {
+      "n": 252,
+      "excess_bps": 2.6,
+      "t": 1.7,
+      "name": "MR>70 snap UP -> long",
+      "h1": 2.1,
+      "h2": 3.13
+    }
+  ]
+}

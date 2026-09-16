@@ -93,11 +93,11 @@ class YFinanceFeed:
                 self._mem[key] = bars
         return bars
 
-    def bars(self, symbol, tf="5m", limit=200, cache_age_s=45):
-        key = (tf, symbol, limit)
+    def bars(self, symbol, tf="5m", limit=200, cache_age_s=45, period=None):
+        key = (tf, symbol, limit, period)
         if self.frozen and key in self._mem:
             return self._mem[key]
-        path = _cache_path(symbol, tf, limit)
+        path = _cache_path(symbol, tf, f"{limit}_{period or 'default'}")
         if cache_age_s:
             cached = _read_cache(path, cache_age_s)
             if cached:
@@ -106,13 +106,15 @@ class YFinanceFeed:
                 return cached
         import yfinance as yf
 
-        period = {1: "1d", 5: "5d", 15: "5d", 60: "1mo"}[
+        period = period or {1: "1d", 5: "5d", 15: "5d", 60: "1mo"}[
             {"1m": 1, "5m": 5, "15m": 15, "1h": 60}[tf]
         ]
         df = yf.download(
             symbol, period=period, interval=tf, progress=False, auto_adjust=False, prepost=False
         )
         bars = _frame_to_bars(df, symbol)
+        if period.endswith("d") and int(period[:-1]) > 7 and bars:
+            bars = [b for b in bars if b.et.hour >= 9 and b.et.hour < 16]
         out = bars[-limit:] if bars else bars
         if bars:
             _write_cache(path, bars)

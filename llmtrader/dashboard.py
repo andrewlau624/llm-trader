@@ -26,6 +26,25 @@ def _tf_row(c):
     )
 
 
+def _raw_bars_block(ctx, cfg):
+    frames = getattr(ctx, "frames", None)
+    if not frames or not cfg.include_raw_bars:
+        return []
+    lines = ["", "--- RAW BARS (most recent last, in ET) ---"]
+    for tf in cfg.timeframes:
+        count = cfg.raw_bar_counts.get(tf, 15)
+        bars = frames.get(tf) or []
+        if not bars:
+            continue
+        lines.append(f"{tf} bars ({min(count, len(bars))} shown):")
+        for b in bars[-count:]:
+            lines.append(
+                f"  {b.et:%H:%M}  {b.open:>9.2f} {b.high:>9.2f} {b.low:>9.2f} "
+                f"{b.close:>9.2f} {b.volume:>10.0f}"
+            )
+    return lines
+
+
 def _scored_block(scored):
     lines = []
     lines.append("--- MARKET CONTEXT SCORES ---")
@@ -59,14 +78,10 @@ def _scored_block(scored):
             f"Nearest S/R {scored.sr_level} at {_f(scored.sr_price)}"
             f" ({_f(scored.sr_distance_atr, 2)}x ATR(5m) away)"
         )
-    if scored.gex:
-        g = scored.gex
-        lines.append(
-            f"GEX        {g.get('regime', 'n/a')} | call wall {g.get('call_wall')}"
-            f" | put wall {g.get('put_wall')} | zero gamma {g.get('zero_gamma')}"
-        )
-    else:
-        lines.append("GEX        no fresh options data, omitted rather than stale")
+    from .gex import render_line
+
+    for line in render_line(scored.gex).split("\n"):
+        lines.append(line)
     lines.append("")
     lines.append("Score guide: Trend and Momentum are -100 (max bearish) to +100 (max bullish).")
     lines.append("MeanRev is 0-100 (how stretched price is from its mean) and always reports the")
@@ -76,10 +91,12 @@ def _scored_block(scored):
 
 
 def render_dashboard(ctx: MarketContext, account=None, recent=None, cfg=None, scored=None,
-                     feedback=None):
+                     feedback=None, gex=None):
     cfg = cfg or Config()
     s = ctx.session
     scored = scored if scored is not None else getattr(ctx, "scored", None)
+    if scored is not None and gex is not None:
+        scored.gex = gex
     lines = []
     lines.append(f"=== MARKET DASHBOARD :: {ctx.symbol} ===")
     et = ctx.now.astimezone(__import__("zoneinfo").ZoneInfo("America/New_York"))
@@ -160,6 +177,13 @@ def render_dashboard(ctx: MarketContext, account=None, recent=None, cfg=None, sc
         lines.append("--- CROSS MARKET ---")
         items = [f"{k} {_signed(v, 2, '%')}" for k, v in ctx.cross_market.items()]
         lines.append("  " + " | ".join(items))
+
+    if cfg.include_empirical_priors:
+        from .priors import load_priors, render_priors
+
+        lines.extend(render_priors(load_priors()))
+
+    lines.extend(_raw_bars_block(ctx, cfg))
 
     if account is not None:
         lines.append("")

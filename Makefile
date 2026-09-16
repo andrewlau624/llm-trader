@@ -32,7 +32,7 @@ REPLAY_FLAGS = $(if $(DATE),--date $(DATE),--days $(DAYS)) --symbol $(SYMBOL) \
                $(if $(filter 1,$(GATE)),--gate,)
 
 .DEFAULT_GOAL := help
-.PHONY: help setup check test lint fmt replay backtest report paper once live stop status logs clean
+.PHONY: help setup check test lint fmt replay backtest report study study-1m paper once live stop status logs clean
 
 help:
 	@echo ""
@@ -46,6 +46,7 @@ help:
 	@echo "  make replay      replay one session     e.g. make replay DATE=2026-09-16"
 	@echo "  make backtest    replay N sessions      e.g. make backtest DAYS=5 GATE=0"
 	@echo "  make report      summarise all runs, win rate and R multiples"
+	@echo "  make study       measure whether the scored dimensions predict anything"
 	@echo ""
 	@echo "  make paper       paper loop, simulated fills, live data, no account"
 	@echo "  make once        one decision cycle now, then exit"
@@ -85,6 +86,12 @@ report:
 
 status:
 	@$(PY) scripts/status.py
+
+study:
+	$(PY) scripts/study.py --granularity 5m --write-priors
+
+study-1m:
+	$(PY) scripts/study.py --granularity 1m
 
 paper:
 	$(PY) scripts/live.py --broker sim --symbol $(SYMBOL) --model $(MODEL) \

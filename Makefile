@@ -26,6 +26,7 @@ DATE     ?=
 DAYS     ?= 5
 INTERVAL ?= 5
 GATE     ?= 1
+NOTIONAL ?= 100   # notional per trade as % of equity, for `make week`
 
 REPLAY_FLAGS = $(if $(DATE),--date $(DATE),--days $(DAYS)) --symbol $(SYMBOL) \
                --model $(MODEL) --backend $(BACKEND) --interval $(INTERVAL) \
@@ -95,6 +96,7 @@ status:
 
 # the week-long forward test: deterministic rule, Alpaca paper, full risk budget
 week:
+	@$(PY) scripts/preflight.py
 	@nohup caffeinate -s bash scripts/supervise.sh --notional-pct $(NOTIONAL) >> /tmp/llmtrader-live.log 2>&1 & echo "started; log: /tmp/llmtrader-live.log"
 
 week-report:

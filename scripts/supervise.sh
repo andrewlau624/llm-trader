@@ -10,7 +10,14 @@
 set -u
 cd "$(dirname "$0")/.."
 LOG="${LLMTRADER_LOG:-/tmp/llmtrader-live.log}"
+POWER=$(pmset -g ps 2>/dev/null | head -1)
 echo "=== supervisor started $(date) args: $* ===" >> "$LOG"
+echo "=== power: $POWER ===" >> "$LOG"
+case "$POWER" in
+  *"AC Power"*) : ;;
+  *) echo "=== WARNING: on battery. caffeinate -s only holds an anti-sleep assertion on AC power," >> "$LOG"
+     echo "=== so this run will pause when the machine sleeps. Plug in, or use a VPS." >> "$LOG" ;;
+esac
 while true; do
   .venv/bin/python -u scripts/live.py --strategy deterministic --broker alpaca "$@" >> "$LOG" 2>&1
   code=$?

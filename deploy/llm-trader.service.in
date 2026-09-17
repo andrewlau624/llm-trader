@@ -1,0 +1,21 @@
+# Installed by `make service`. Paths are filled in from the clone location.
+[Unit]
+Description=llm-trader deterministic paper loop
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__APP_DIR__
+# '-' means start anyway if the file is missing, so `make env` is not a hard prerequisite
+EnvironmentFile=-__APP_DIR__/.env
+ExecStart=__APP_DIR__/.venv/bin/python -u scripts/live.py \
+    --strategy deterministic --broker alpaca --notional-pct 100
+Restart=always
+RestartSec=30
+StandardOutput=append:/tmp/llmtrader-live.log
+StandardError=append:/tmp/llmtrader-live.log
+
+[Install]
+WantedBy=multi-user.target

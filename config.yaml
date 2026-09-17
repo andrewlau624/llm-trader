@@ -44,7 +44,10 @@ allow_shorts: true
 # risk
 equity: 100000
 risk_per_trade_pct: 0.25
-max_notional_pct: 10.0
+# 100 = fully deployed, not leverage. A 1-ATR stop on a fully deployed position risks roughly
+# 0.25% of equity, which is the intended budget. The previous 10% default silently starved every
+# trade to 0.04% risk, which is why the backtest returns looked tiny for so long.
+max_notional_pct: 100.0
 max_trades_per_day: 6
 max_daily_loss_pct: 1.0
 max_consecutive_losses: 3

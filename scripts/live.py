@@ -7,6 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from llmtrader.broker.base import BrokerError
 from llmtrader.config import Config
 from llmtrader.data.base import ET, RTH_CLOSE, RTH_OPEN, to_utc
 from llmtrader.data.feeds import get_feed
@@ -287,9 +288,18 @@ def main(argv=None):
                                "candidates": len(picks)},
                     )
                     if verdict.allowed:
-                        broker.submit(decision, verdict.size, now)
-                        print(f"  ENTRY {decision.action} {cand.symbol} size {verdict.size:.2f} "
-                              f"expected {cand.expected_bps:.1f}bps | {cand.reason[:90]}")
+                        try:
+                            broker.submit(decision, verdict.size, now)
+                        except BrokerError as e:
+                            journal.log_event({
+                                "event": "entry_not_placed", "error": str(e)[:300],
+                                "ts": now.isoformat(), "symbol": cand.symbol,
+                            })
+                            print(f"  NOT PLACED {cand.symbol}: {str(e)[:140]}")
+                        else:
+                            print(f"  ENTRY {decision.action} {cand.symbol} "
+                                  f"size {verdict.size:.2f} expected "
+                                  f"{cand.expected_bps:.1f}bps | {cand.reason[:80]}")
                     else:
                         print(f"  signal {cand.symbol} rejected: {verdict.summary()[:120]}")
             else:

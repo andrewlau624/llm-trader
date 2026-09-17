@@ -22,6 +22,8 @@ def load_dotenv(path=None):
 @dataclass
 class Config:
     symbols: list = field(default_factory=lambda: ["SPY"])
+    basket: list = field(default_factory=list)
+    strategy: str = "deterministic"
     decision_interval_min: int = 5
     timeframes: list = field(default_factory=lambda: ["1m", "5m", "1h"])
     bars_per_timeframe: int = 15
@@ -37,6 +39,11 @@ class Config:
     llm_timeout_s: int = 180
     llm_retries: int = 2
     shadow_models: list = field(default_factory=list)
+
+    reversal_min_score: float = 60.0
+    reversal_stop_atr: float = 1.0
+    reversal_target_atr: float = 2.0
+    reversal_min_expected_bps: float = 3.0
 
     min_confidence: int = 6
     min_reward_risk: float = 1.5
@@ -91,6 +98,7 @@ class Config:
 
     def __post_init__(self):
         self.symbols = [s.upper() for s in self.symbols]
+        self.basket = [s.upper() for s in (self.basket or self.symbols)]
         self.extra_context_symbols = [s.upper() for s in self.extra_context_symbols]
 
     @classmethod

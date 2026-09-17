@@ -2,6 +2,10 @@
 
 # what to trade
 symbols: [SPY]
+# basket for the deterministic strategy: it picks the single best setup across these each cycle
+basket: [SPY, QQQ, IWM, TQQQ]
+# llm (a model reads the dashboard) or deterministic (the measured reversal rule, no model)
+strategy: deterministic
 extra_context_symbols: [QQQ, IWM, VIXY]
 decision_interval_min: 5
 timeframes: [1m, 5m, 1h]

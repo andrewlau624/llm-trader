@@ -12,8 +12,12 @@ from llmtrader.data.base import ET, RTH_CLOSE, RTH_OPEN, to_utc
 from llmtrader.data.feeds import get_feed
 from llmtrader.journal import Journal
 from llmtrader.llm import build_client
+from llmtrader.priors import load_priors
 from llmtrader.report import render_report
+from llmtrader.risk import check
 from llmtrader.runner import Engine
+from llmtrader.strategy import candidates_for
+from llmtrader.trader import Decision
 
 
 def next_decision_time(now_utc, interval):
@@ -121,6 +125,9 @@ def main(argv=None):
         "--gate", action="store_true",
         help="only call the LLM when the context is actionable",
     )
+    ap.add_argument("--strategy", default="llm", choices=["llm", "deterministic"],
+                    help="deterministic runs the measured reversal rule with no model in the "
+                         "loop; the backtest says the formula works and the model does not")
     args = ap.parse_args(argv)
 
     cfg = Config.load()
@@ -138,11 +145,22 @@ def main(argv=None):
         cfg.data_source = args.source
 
     symbol = cfg.symbols[0]
+    basket = list(dict.fromkeys(cfg.basket or cfg.symbols))
+    deterministic = args.strategy == "deterministic"
     feed = get_feed(cfg.data_source, frozen=False)
-    client = build_client(cfg)
+    client = None if deterministic else build_client(cfg)
     journal = Journal(cfg, symbol=symbol, mode="paper")
     broker = build_broker(args, cfg)
-    engine = Engine(cfg, feed=feed, client=client, broker=broker, journal=journal)
+    deterministic = args.strategy == "deterministic"
+    engine = None
+    priors = load_priors() if deterministic else None
+    if deterministic:
+        cfg.symbols = basket
+        if not priors:
+            print("no priors file: run 'make study' first so the rule can price its own setups")
+    else:
+        cfg.symbols = [symbol]
+        engine = Engine(cfg, feed=feed, client=client, broker=broker, journal=journal)
     pump = SimPump(feed, broker, journal, symbol) if args.broker == "sim" else None
     journal.write_meta(
         {
@@ -158,11 +176,19 @@ def main(argv=None):
             "config": {k: v for k, v in cfg.__dict__.items()},
         }
     )
-    print(
-        f"paper run: {symbol} on {args.broker} ({cfg.data_source} data) | "
-        f"{cfg.ollama_model} via {cfg.llm_backend} | interval {cfg.decision_interval_min}m"
-    )
+    if deterministic:
+        print(
+            f"paper run: {args.broker} ({cfg.data_source} data) | deterministic reversal rule | "
+            f"interval {cfg.decision_interval_min}m | basket {', '.join(basket)}"
+        )
+    else:
+        print(
+            f"paper run: {symbol} on {args.broker} ({cfg.data_source} data) | "
+            f"{cfg.ollama_model} via {cfg.llm_backend} | interval {cfg.decision_interval_min}m"
+        )
     print(f"journal: {journal.dir}")
+    print(f"strategy: {'deterministic reversal rule (no LLM)' if deterministic else 'LLM'}"
+          f"{' | basket ' + ', '.join(basket) if deterministic else ''}")
     if args.broker == "sim":
         print("simulated fills: positions are managed bar by bar from live data")
     if pump:
@@ -187,6 +213,15 @@ def main(argv=None):
                         f"  closed {t.side} {t.exit_reason} pnl {t.pnl:+.2f} "
                         f"({t.r_multiple:+.2f}R)"
                     )
+            if args.broker == "alpaca":
+                for rec in broker.measure_slippage():
+                    journal.log_event(rec)
+                    print(
+                        f"  FILL-VS-SIGNAL {rec['symbol']}: signal {rec['signal_price']} -> fill "
+                        f"{rec['fill_price']} = {rec['cost_bps']:+.2f} bps "
+                        f"(model assumes {rec['modelled_bps']} bps, edge "
+                        f"{rec.get('expected_bps')} bps)"
+                    )
             if pump:
                 pump.advance()
             if args.broker == "alpaca" and broker.open_entry and not market_open(now):
@@ -202,7 +237,57 @@ def main(argv=None):
             if args.broker == "alpaca" and broker.forced_exit_due(now, price):
                 print("  forced exit: position held past its time limit")
                 broker.close_all()
-            engine.step(now, account=account)
+            if deterministic:
+                bars_by_symbol = {}
+                for sym in basket:
+                    try:
+                        series = feed.bars_1m(sym, days=3)
+                    except Exception:
+                        series = []
+                    if series:
+                        bars_by_symbol[sym] = series
+                picks = candidates_for(
+                    bars_by_symbol, now, cfg, priors, tuple(cfg.timeframes)
+                )
+                if not picks:
+                    journal.log_event(
+                        {"ts": now.isoformat(), "event": "no_candidate",
+                         "symbols": len(bars_by_symbol)}
+                    )
+                else:
+                    picks.sort(key=lambda pair: -(pair[0].expected_bps * pair[0].score))
+                    cand, ctx = picks[0]
+                    acct = (
+                        broker.account_state(ctx.price) if args.broker == "alpaca"
+                        else broker.snapshot(ctx.price)
+                    )
+                    decision = Decision(
+                        action="enter_long" if cand.direction == "long" else "enter_short",
+                        confidence=min(10, max(1, int(cand.score / 10))),
+                        entry=cand.entry, stop_loss=cand.stop, take_profit=cand.take_profit,
+                        size_multiplier=1.0, max_hold_minutes=cfg.max_hold_min,
+                        thesis=cand.reason,
+                        invalidation="price keeps going instead of snapping back",
+                    )
+                    decision.regime = ctx.regime
+                    decision.symbol = cand.symbol
+                    decision.expected_bps = cand.expected_bps
+                    verdict = check(decision, ctx, acct, cfg)
+                    journal.log_decision(
+                        now, ctx, "", decision, verdict, acct,
+                        extra={"strategy": "deterministic",
+                               "expected_bps": cand.expected_bps,
+                               "signal_price": cand.entry,
+                               "candidates": len(picks)},
+                    )
+                    if verdict.allowed:
+                        broker.submit(decision, verdict.size, now)
+                        print(f"  ENTRY {decision.action} {cand.symbol} size {verdict.size:.2f} "
+                              f"expected {cand.expected_bps:.1f}bps | {cand.reason[:90]}")
+                    else:
+                        print(f"  signal {cand.symbol} rejected: {verdict.summary()[:120]}")
+            else:
+                engine.step(now, account=account)
         except Exception as e:
             traceback.print_exc()
             journal.log_event({"event": "error", "error": str(e), "ts": now.isoformat()})

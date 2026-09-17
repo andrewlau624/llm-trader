@@ -51,6 +51,7 @@ class AlpacaBroker:
         self.cfg = cfg
         self.book = account or LocalAccount(cfg.equity, authoritative_equity=True)
         self.open_entry = None
+        self.open_entries = {}
         self.trades = []
         self.events = []
         self._last_equity = None
@@ -78,20 +79,27 @@ class AlpacaBroker:
             self.book.set_balance(equity)
             self.book.start_day(et.date(), equity=equity)
 
-    def _open_position(self):
+    def symbols(self):
+        return list(dict.fromkeys(self.cfg.symbols))
+
+    def _open_position(self, symbol=None):
+        symbol = symbol or self.cfg.symbols[0]
         try:
-            pos = self.client.get_open_position(self.cfg.symbols[0])
+            pos = self.client.get_open_position(symbol)
         except Exception:
             return None
         qty = abs(float(pos.qty))
         entry = float(pos.avg_entry_price)
         side = "long" if float(pos.qty) > 0 else "short"
+        entry_info = self.open_entries.get(symbol) or (
+            self.open_entry if self.open_entry and self.open_entry.get("symbol") == symbol else {}
+        )
         stop = tp = None
         opened = to_utc(datetime.now(timezone.utc))
-        if self.open_entry:
-            stop = self.open_entry.get("stop")
-            tp = self.open_entry.get("take_profit")
-            opened = self.open_entry.get("opened_at", opened)
+        if entry_info:
+            stop = entry_info.get("stop")
+            tp = entry_info.get("take_profit")
+            opened = entry_info.get("opened_at", opened)
         return Position(
             symbol=pos.symbol,
             side=side,
@@ -100,41 +108,110 @@ class AlpacaBroker:
             stop=stop,
             take_profit=tp,
             opened_at=opened,
-            confidence=(self.open_entry or {}).get("confidence", 0),
-            rationale=(self.open_entry or {}).get("rationale", ""),
-            regime=(self.open_entry or {}).get("regime", ""),
-            max_hold_min=(self.open_entry or {}).get("max_hold_min", self.cfg.max_hold_min),
+            confidence=entry_info.get("confidence", 0),
+            rationale=entry_info.get("rationale", ""),
+            regime=entry_info.get("regime", ""),
+            max_hold_min=entry_info.get("max_hold_min", self.cfg.max_hold_min),
         )
 
+    def measure_slippage(self):
+        """Returns fill-vs-signal records for any newly filled entry, once each."""
+        out = []
+        for symbol in list(self.open_entries):
+            rec = self._measure_one(symbol)
+            if rec:
+                out.append(rec)
+        return out
+
+    def _measure_one(self, symbol=None):
+        """What the fill actually cost versus the price the signal was written against.
+
+        This is the single number that decides whether the backtest means anything: the strategy's
+        entire edge is ~14 bps per trade and break-even sits near 16 bps round trip, so real
+        execution versus the modelled 3 bps is the difference between profit and loss.
+        """
+        symbol = symbol or self.cfg.symbols[0]
+        info = self.open_entries.get(symbol)
+        if not info or not info.get("signal_price"):
+            return None
+        measured = getattr(self, "_measured", None)
+        if measured is None:
+            measured = self._measured = set()
+        if str(info.get("entry_order_id")) in measured:
+            return None
+        try:
+            from alpaca.trading.enums import QueryOrderStatus
+            from alpaca.trading.requests import GetOrdersRequest
+        except Exception:
+            return None
+        try:
+            orders = self.client.get_orders(GetOrdersRequest(
+                status=QueryOrderStatus.ALL, symbols=[symbol], limit=20
+            ))
+        except Exception:
+            return None
+        for o in orders:
+            if str(o.id) != str(info.get("entry_order_id")) or not o.filled_avg_price:
+                continue
+            fill = float(o.filled_avg_price)
+            signal = float(info["signal_price"])
+            direction = 1.0 if info.get("side") == "long" else -1.0
+            cost_bps = (fill - signal) * direction / signal * 10000.0
+            record = {
+                "ts": to_utc(o.filled_at).isoformat() if o.filled_at else None,
+                "symbol": symbol,
+                "event": "fill_vs_signal",
+                "signal_price": round(signal, 4),
+                "fill_price": round(fill, 4),
+                "cost_bps": round(cost_bps, 2),
+                "expected_bps": info.get("expected_bps"),
+                "modelled_bps": self.cfg.slippage_bps,
+            }
+            measured.add(str(info.get("entry_order_id")))
+            self.events.append(record)
+            return record
+        return None
+
     def sync(self, now=None):
+        """Reconcile every symbol in the basket. Returns closed trades."""
         now = to_utc(now or datetime.now(timezone.utc))
         self.start_day_if_needed(now)
-        pos = self._open_position()
-        if pos is not None:
-            self.book.position = pos
-            return []
-        if self.book.position is None and not self.open_entry:
-            return []
-        closed = self._resolve_closed_trade(now)
-        self.book.position = None
-        self.open_entry = None
-        if closed:
-            self.trades.append(closed)
-            self.book.close_position(closed)
-            update_halt(self.book, self.cfg)
-            self.events.append(
-                {
+        closed_out = []
+        for symbol in self.symbols():
+            pos = self._open_position(symbol)
+            if pos is not None:
+                self.book.position = pos
+                self._open_symbol = symbol
+                continue
+            pending = self.open_entries.get(symbol)
+            if pending is None and not (
+                self.open_entry and self.open_entry.get("symbol") == symbol
+            ):
+                continue
+            closed = self._resolve_closed_trade(now, symbol)
+            self.open_entries.pop(symbol, None)
+            if self.open_entry and self.open_entry.get("symbol") == symbol:
+                self.open_entry = None
+            if self.book.position is not None and self.book.position.symbol == symbol:
+                self.book.position = None
+            if closed:
+                self.trades.append(closed)
+                self.book.close_position(closed)
+                update_halt(self.book, self.cfg)
+                self.events.append({
                     "ts": now.isoformat(),
                     "event": f"exit_{closed.exit_reason}",
                     "pnl": round(closed.pnl, 2),
                     "r": round(closed.r_multiple, 2),
-                }
-            )
-            return [closed]
-        return []
+                })
+                closed_out.append(closed)
+        return closed_out
 
-    def _resolve_closed_trade(self, now):
-        entry_info = self.open_entry or {}
+    def _resolve_closed_trade(self, now, symbol=None):
+        symbol = symbol or self.cfg.symbols[0]
+        entry_info = self.open_entries.get(symbol) or (
+            self.open_entry or {}
+        )
         entry_price = entry_info.get("entry")
         exit_price = None
         reason = "unknown"
@@ -144,7 +221,7 @@ class AlpacaBroker:
 
             req = GetOrdersRequest(
                 status=QueryOrderStatus.CLOSED,
-                symbols=[self.cfg.symbols[0]],
+                symbols=[symbol],
                 after=now - timedelta(days=2),
                 limit=50,
             )
@@ -203,7 +280,7 @@ class AlpacaBroker:
             TakeProfitRequest,
         )
 
-        symbol = self.cfg.symbols[0]
+        symbol = getattr(decision, "symbol", "") or self.cfg.symbols[0]
         now = to_utc(now or datetime.now(timezone.utc))
         if not in_rth(now) and not self.cfg.allow_after_hours:
             raise BrokerError(
@@ -256,7 +333,10 @@ class AlpacaBroker:
                  "ts": (now or datetime.now(timezone.utc)).isoformat()}
             )
             raise BrokerError(f"alpaca rejected the order: {str(e)[:300]}") from e
-        self.open_entry = {
+        self.open_entry = self.open_entries[symbol] = {
+            "symbol": symbol,
+            "signal_price": getattr(decision, "entry", None),
+            "expected_bps": getattr(decision, "expected_bps", None),
             "entry_order_id": str(order.id),
             "side": decision.side,
             "qty": float(qty),

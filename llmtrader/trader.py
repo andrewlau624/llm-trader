@@ -37,6 +37,8 @@ class Decision:
     prompt_tokens: int = None
     completion_tokens: int = None
     regime: str = ""
+    symbol: str = ""
+    expected_bps: float = None
     parse_ok: bool = True
     semantic_ok: bool = True
     parse_error: str = ""

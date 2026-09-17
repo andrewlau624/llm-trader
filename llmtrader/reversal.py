@@ -55,13 +55,21 @@ def volatility_scale(ctx):
     return 1.0, None, None
 
 
-def evaluate(ctx, scored, priors=None, cfg=None, min_score=60.0, stop_atr=1.0, target_atr=2.0,
-             min_expected_bps=3.0):
+def evaluate(ctx, scored, priors=None, cfg=None, min_score=None, stop_atr=None, target_atr=None,
+             min_expected_bps=None):
     """Return a candidate when the reversal setup is present, else None.
 
     Deliberately refuses to manufacture a candidate: the study's central lesson is that most
     windows have no edge, so returning None is the normal outcome, not a failure.
     """
+    if min_score is None:
+        min_score = getattr(cfg, "reversal_min_score", 60.0)
+    if stop_atr is None:
+        stop_atr = getattr(cfg, "reversal_stop_atr", 1.0)
+    if target_atr is None:
+        target_atr = getattr(cfg, "reversal_target_atr", 2.0)
+    if min_expected_bps is None:
+        min_expected_bps = getattr(cfg, "reversal_min_expected_bps", 3.0)
     if ctx.session is None or ctx.price is None:
         return None
     if scored is None:

@@ -24,13 +24,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from llmtrader.broker import LocalAccount
 from llmtrader.broker.sim import SimBroker
 from llmtrader.config import ROOT, Config
-from llmtrader.context import build_context
 from llmtrader.data.base import minutes_from_open, minutes_to_close, to_utc
 from llmtrader.data.feeds import get_feed
 from llmtrader.priors import load_priors
-from llmtrader.reversal import evaluate
 from llmtrader.risk import check
-from llmtrader.scorer import score_context
+from llmtrader.strategy import candidates_for
 from llmtrader.trader import Decision
 
 TAIL = 1500
@@ -137,24 +135,11 @@ def simulate(feed, cfg, symbols, granularity, priors, interval=5, control=None,
                 and minutes_from_open(now) >= cfg.no_entry_first_min
                 and minutes_to_close(now) >= cfg.no_entry_last_min + 5
             ):
-                picks = []
-                for sym, bars in bars_by_symbol.items():
-                    window = [b for b in bars if to_utc(b.ts) <= now][-TAIL:]
-                    if len(window) < 60:
-                        continue
-                    try:
-                        ctx = build_context(sym, window, now, timeframes=tfs)
-                    except Exception:
-                        continue
-                    if ctx.session is None or ctx.price is None:
-                        continue
-                    scored = score_context(ctx, getattr(ctx, "frames", None))
-                    cand = evaluate(ctx, scored, priors=priors, cfg=cfg)
-                    if cand:
-                        picks.append((cand, ctx))
+                picks = candidates_for(bars_by_symbol, now, cfg, priors, tfs, tail=TAIL)
                 candidates += len(picks)
+                cand = ctx = None
                 if picks:
-                    picks.sort(key=lambda p: -(p[0].expected_bps * p[0].score))
+                    picks.sort(key=lambda pair: -(pair[0].expected_bps * pair[0].score))
                     cand, ctx = picks[0]
                     cand = apply_control(cand, control)
                     decision = Decision(
@@ -249,6 +234,11 @@ def main(argv=None):
     ap.add_argument("--notional-pct", type=float, default=None,
                     help="override max_notional_pct: how much notional per trade relative to "
                          "equity. 10 = cap, 100 = fully deployed, above 100 = leverage.")
+    ap.add_argument("--min-score", type=float, default=None,
+                    help="reversal conviction floor (default 60). Sweeping this checks whether "
+                         "the parameters sit on a plateau or a spike.")
+    ap.add_argument("--stop-atr", type=float, default=None)
+    ap.add_argument("--target-atr", type=float, default=None)
     ap.add_argument("--slippage-bps", type=float, default=None,
                     help=r"slippage per side in bps. TQQQ trades 1-3 cents wide on ~$70, which is "
                          "2-5 bps per side, so the default 1.5 is optimistic for it.")
@@ -267,6 +257,12 @@ def main(argv=None):
         cfg.max_notional_pct = args.notional_pct
     if args.slippage_bps is not None:
         cfg.slippage_bps = args.slippage_bps
+    if args.min_score is not None:
+        cfg.reversal_min_score = args.min_score
+    if args.stop_atr is not None:
+        cfg.reversal_stop_atr = args.stop_atr
+    if args.target_atr is not None:
+        cfg.reversal_target_atr = args.target_atr
     priors = load_priors(args.priors)
     feed = get_feed("yfinance", frozen=True)
     print(f"\ndeterministic scan: {', '.join(symbols)} | {args.granularity} | equity "

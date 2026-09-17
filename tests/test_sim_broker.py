@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from llmtrader.broker.accounting import LocalAccount
 from llmtrader.broker.sim import SimBroker
 from llmtrader.data.base import Bar
@@ -84,13 +86,46 @@ def test_stop_wins_when_bar_covers_both(cfg):
     assert broker.trades[0].exit_reason == "stop"
 
 
-def test_fill_bar_is_not_managed(cfg):
+def test_fill_bar_is_managed(cfg):
+    """A bar's open is its first tick, so its high and low are posterior to a fill at that open.
+    Skipping the fill bar let every position survive one bar in which the stop could not fire."""
     broker = SimBroker(cfg, account=LocalAccount(100000))
     broker.submit(long_decision(stop=99.0, tp=103.0), 10,
                   datetime(2026, 9, 16, 13, 30, tzinfo=timezone.utc))
     broker.process_bar(bar(0, 100, 100.5, 90.0, 100.2))
-    assert broker.account.position is not None
-    assert broker.trades == []
+    assert broker.account.position is None
+    assert len(broker.trades) == 1
+    assert broker.trades[0].exit_reason == "stop"
+
+
+def test_stop_and_target_are_anchored_to_the_fill_not_the_decision(cfg):
+    """A growing gap between the decision price and the fill must not move the entry closer to
+    the target than to the stop. The bracket travels with the fill."""
+    broker = SimBroker(cfg, account=LocalAccount(100000))
+    broker.submit(long_decision(entry=100.0, stop=99.0, tp=103.0), 10,
+                  datetime(2026, 9, 16, 13, 30, tzinfo=timezone.utc))
+    broker.process_bar(bar(0, 110.0, 110.2, 109.9, 110.1))
+    pos = broker.account.position
+    assert pos.entry == 110.0
+    assert pos.stop == 109.0
+    assert pos.take_profit == 113.0
+    assert abs(pos.entry - pos.stop) == 1.0
+    assert abs(pos.take_profit - pos.entry) == 3.0
+
+
+def test_a_favourable_gap_does_not_flatter_the_trade(cfg):
+    """Regression: with the stop/target left at the decision price, a favourable gap put the
+    entry almost on top of the target while the stop sat a full distance away, which made both
+    directions profitable and produced a fake edge in the scanner."""
+    broker = SimBroker(cfg, account=LocalAccount(100000))
+    broker.submit(long_decision(entry=100.0, stop=99.0, tp=102.0), 10,
+                  datetime(2026, 9, 16, 13, 30, tzinfo=timezone.utc))
+    broker.process_bar(bar(0, 101.9, 102.0, 101.8, 101.9))
+    pos = broker.account.position
+    risk = abs(pos.entry - pos.stop)
+    reward = abs(pos.take_profit - pos.entry)
+    assert reward / risk == pytest.approx(2.0)
+    assert pos.take_profit == pytest.approx(103.9)
 
 
 def test_max_hold_exit_at_close(cfg):

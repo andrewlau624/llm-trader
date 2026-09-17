@@ -32,7 +32,7 @@ REPLAY_FLAGS = $(if $(DATE),--date $(DATE),--days $(DAYS)) --symbol $(SYMBOL) \
                $(if $(filter 1,$(GATE)),--gate,)
 
 .DEFAULT_GOAL := help
-.PHONY: help setup check test lint fmt replay backtest report study study-1m economics paper once live stop status logs clean
+.PHONY: help setup check test lint fmt replay backtest report study study-1m economics scan controls paper once live stop status logs clean
 
 help:
 	@echo ""
@@ -48,6 +48,8 @@ help:
 	@echo "  make report      summarise all runs, win rate and R multiples"
 	@echo "  make study       measure whether the scored dimensions predict anything"
 	@echo "  make economics   what it could make and cost  e.g. make economics EQUITY=5000"
+	@echo "  make scan        deterministic reversal scanner across a basket"
+	@echo "  make controls    sanity-check the simulator (flip/random/resolution)"
 	@echo ""
 	@echo "  make paper       paper loop, simulated fills, live data, no account"
 	@echo "  make once        one decision cycle now, then exit"
@@ -93,6 +95,19 @@ study:
 
 study-1m:
 	$(PY) scripts/study.py --granularity 1m
+
+scan:
+	$(PY) scripts/scan.py --symbols $(if $(SYMBOLS),$(SYMBOLS),SPY,QQQ,IWM,TQQQ) --granularity 5m
+
+controls:
+	@echo "=== real ==="
+	@$(PY) scripts/scan.py --symbols $(if $(SYMBOLS),$(SYMBOLS),SPY,QQQ,IWM,TQQQ) 2>&1 | sed -n '3,12p'
+	@echo "=== flipped (must LOSE) ==="
+	@$(PY) scripts/scan.py --symbols $(if $(SYMBOLS),$(SYMBOLS),SPY,QQQ,IWM,TQQQ) --control flip 2>&1 | sed -n '3,12p'
+	@echo "=== random (must be ~flat) ==="
+	@$(PY) scripts/scan.py --symbols $(if $(SYMBOLS),$(SYMBOLS),SPY,QQQ,IWM,TQQQ) --control random 2>&1 | sed -n '3,12p'
+	@echo "=== 1m resolution (must agree in sign with 5m) ==="
+	@$(PY) scripts/scan.py --symbols SPY,QQQ --granularity 1m 2>&1 | sed -n '3,12p'
 
 economics:
 	$(PY) scripts/economics.py $(if $(EQUITY),--equity $(EQUITY),--equity 1000)

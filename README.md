@@ -390,6 +390,63 @@ specifically because the brackets live on Alpaca's side and survive the process 
 memory-resident sim broker does not. Full walkthrough including the systemd unit:
 [docs/remote.md](docs/remote.md).
 
+## Why I am not claiming a gain from the scanner
+
+`scripts/scan.py` applies the measured reversal rule mechanically across a basket, with no LLM, and
+the same risk rules. Its first run looked excellent: **+3.85% over 60 sessions, 294 trades, 48.3%
+win rate**, positive in all four symbols. That result was not real, and the way it failed is worth
+more than the result would have been.
+
+Three checks, in order:
+
+**1. Sanity controls.** Same mechanics, direction flipped and randomised. `make controls`.
+
+| arm | trades | win rate | net | profit factor |
+|---|---|---|---|---|
+| real reversal | 265 | 48.7% | **+3.39%** | 1.48 |
+| random direction | 301 | 49.8% | +3.06% | 1.37 |
+| **flipped direction** | 315 | **54.9%** | **+6.06%** | **1.80** |
+
+Every arm profited and the *anti-signal* profited most. That ordered the arms backwards from what
+the study measured, which meant the simulator was handing out an advantage unrelated to direction.
+Two real bugs, both in `SimBroker`:
+
+- **Stop and target were anchored to the decision price, not the fill.** The decision references
+  the last *completed* bar's close; the fill happens at the *next* bar's open. With a 2:1
+  target:stop, any drift in the gap puts the entry nearer the target than the stop — for either
+  direction. A bracket anchored at the fill is what a real broker does, and it is now what this
+  does.
+- **The fill bar was never managed.** `_manage` skipped `bar.ts <= pos.opened_at`, giving every
+  position one free bar in which the stop could not fire. A bar's open is its first tick, so its
+  high and low are necessarily *posterior* to a fill at that open. The fill bar is now managed, and
+  both bugs have regression tests.
+
+After the fix the arms ordered correctly: real **+3.85%** / 48.3% wins, random −0.09%, flipped
+−0.81% / 31.5% wins. A 48.3% hit rate against the 33.3% a random walk gives at 2:1 target:stop is a
+real directional signal.
+
+**2. Resolution check.** The 5-minute result depends on 5-minute bars resolving a stop that is one
+5-minute ATR away — the simulation is operating exactly at its own resolution limit. Re-run on
+1-minute bars, where a 1-ATR stop resolves across several bars: **36 trades, 8.3% win rate, −0.45%**,
+with 92% of exits on the stop. The two resolutions disagree qualitatively.
+
+The cause is visible in the loop: at 5-minute granularity the stamps are five minutes apart, so
+there is a **five-minute gap between the price the signal saw and the price it filled at**; at
+1-minute granularity that gap is one minute. The 5-minute edge lives in that gap. I have not
+isolated whether the gap flatters the result or the 1m sample is simply too small — it is 7 sessions
+against 60 — but either way **the simulator is not resolution-stable, so its performance numbers
+cannot be trusted yet.**
+
+**3. Sample discipline.** Seven sessions of 1-minute data versus sixty of 5-minute. Neither is a
+cycle, and both cover the same single bull-to-chop regime.
+
+So: the scanner is committed, the bugs it exposed are fixed, and the harness now carries its own
+falsification tests. No performance claim survives them. That is the correct state of the evidence,
+and it is worth restating the pattern — three times now an apparent edge from this system has
+evaporated or inverted under a control, a split, or a resolution change. The measured ~5 bps prior
+from the study is the only number that has survived scrutiny, and it is far too small to trade
+profitably at any account size this project can reach.
+
 ## Honest limits
 
 - **A profitable-looking replay is not evidence of edge.** These runs cover single sessions with

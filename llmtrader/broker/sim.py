@@ -38,14 +38,20 @@ class SimBroker:
         size = self.pending["size"]
         direction = 1.0 if decision.action == "enter_long" else -1.0
         entry = self._slip(bar.open, direction)
+        # A real bracket is anchored to the fill, not to whatever price the decision was written
+        # against. Anchoring to the decision price hands the trade a free edge whenever price
+        # drifts between the decision and the fill: with a 2:1 target:stop, a favourable drift
+        # moves the entry closer to the target than to the stop for either direction.
+        stop = entry + (decision.stop_loss - decision.entry)
+        take_profit = entry + (decision.take_profit - decision.entry)
         self.account.open_position(
             Position(
                 symbol=bar.symbol,
                 side="long" if direction > 0 else "short",
                 qty=size,
                 entry=entry,
-                stop=decision.stop_loss,
-                take_profit=decision.take_profit,
+                stop=stop,
+                take_profit=take_profit,
                 opened_at=bar.ts,
                 confidence=decision.confidence,
                 rationale=decision.thesis,
@@ -57,7 +63,12 @@ class SimBroker:
 
     def _manage(self, bar):
         pos = self.account.position
-        if pos is None or to_utc(bar.ts) <= to_utc(pos.opened_at):
+        if pos is None:
+            return
+        # The fill bar is managed too: a bar's open is its first tick, so its high and low are
+        # necessarily posterior to a fill at that open. Skipping it gave every position a free
+        # first bar in which the stop could not trigger.
+        if to_utc(bar.ts) < to_utc(pos.opened_at):
             return
         direction = 1.0 if pos.side == "long" else -1.0
         pos.max_mfe = max(getattr(pos, "max_mfe", 0.0), (bar.high - pos.entry) * direction)

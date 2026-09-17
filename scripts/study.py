@@ -190,14 +190,65 @@ def main(argv=None):
     ap.add_argument("--granularity", default="5m", choices=["1m", "5m"])
     ap.add_argument("--horizons", default="15,30,60")
     ap.add_argument("--out", default=None)
+    ap.add_argument("--compare", default=None,
+                    help="comma separated symbols: rank them by measured edge instead of "
+                         "studying one in depth")
     ap.add_argument("--write-priors", action="store_true",
                     help="write llmtrader/empirical_priors.json for the prompt to quote")
     args = ap.parse_args(argv)
     horizons = [int(h) for h in args.horizons.split(",")]
     cfg = Config.load()
-    cfg.symbols = [args.symbol.upper()]
     symbol = args.symbol.upper()
+    cfg.symbols = [symbol]
     feed = get_feed("yfinance", frozen=True)
+
+    if args.compare:
+        from llmtrader.analysis import build_priors
+
+        symbols = [s.strip().upper() for s in args.compare.split(",") if s.strip()]
+        print(f"\ncomparing {len(symbols)} instruments | {args.granularity} resolution | "
+              f"{horizons}m horizons | excess returns, net of {ROUND_TRIP_COST_BPS}bps")
+        rows_out = []
+        for sym in symbols:
+            try:
+                sym_rows, sym_sessions, _ = collect(
+                    feed, cfg, sym, horizons, args.granularity
+                )
+            except SystemExit:
+                print(f"  {sym:<9} no data, skipped")
+                continue
+            if len(sym_rows) < 200:
+                print(f"  {sym:<9} only {len(sym_rows)} windows, skipped")
+                continue
+            priors = build_priors(sym_rows, horizons, sym, args.granularity)
+            labels = priors.get("labels", {})
+            bull = labels.get("BULL", {}).get("excess_bps")
+            bear = labels.get("BEAR", {}).get("excess_bps")
+            rules = {r["name"]: r for r in priors.get("rules", [])}
+            fade = rules.get("fade adx>25 with volume>1.2", {})
+            best = max(priors.get("rules", [{}]), key=lambda r: abs(r.get("excess_bps", 0)),
+                       default={})
+            rows_out.append({
+                "symbol": sym, "windows": len(sym_rows), "sessions": len(sym_sessions),
+                "bull": bull, "bear": bear,
+                "fade": fade.get("excess_bps"), "fade_n": fade.get("n"),
+                "best_name": best.get("name"), "best_bps": best.get("excess_bps"),
+            })
+            print(f"  {sym:<9} {len(sym_rows):>5} windows  "
+                  f"BULL {bull if bull is not None else 0:+7.2f}  "
+                  f"BEAR {bear if bear is not None else 0:+7.2f}  "
+                  f"fade {fade.get('excess_bps', 0) or 0:+7.2f}  "
+                  f"best {best.get('excess_bps', 0) or 0:+7.2f} ({best.get('name', '-')})")
+        rows_out.sort(key=lambda r: -(abs(r.get("best_bps") or 0)))
+        print("\n  ranked by the size of the largest single effect found:")
+        for r in rows_out:
+            print(f"    {r['symbol']:<9} {r['best_bps']:+7.2f} bps  "
+                  f"n={r.get('best_n', '?')} {r['best_name']}")
+        out = args.out or str(ROOT / "runs" / f"instrument-compare-{args.granularity}.json")
+        Path(out).parent.mkdir(parents=True, exist_ok=True)
+        Path(out).write_text(json.dumps(rows_out, indent=2, default=str))
+        print(f"\nwrote {out}")
+        return 0
     print(f"\nsignal study: {symbol} | {args.granularity} resolution")
     rows, sessions, baselines = collect(feed, cfg, symbol, horizons, args.granularity)
     if not rows:

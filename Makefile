@@ -120,10 +120,10 @@ priors:
 	@$(PY) scripts/study.py --granularity 5m --write-priors 2>&1 | tail -4
 
 test:
-	@$(PY) -m pytest -q 2>&1 | tail -3
+	@$(PY) -m pytest -q -p no:warnings 2>&1 | tail -2
 
 lint:
-	@$(PY) -m ruff check .
+	@$(PY) -m ruff check . && echo "  lint clean"
 
 # ---------------------------------------------------------------- run it
 

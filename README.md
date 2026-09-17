@@ -447,6 +447,60 @@ evaporated or inverted under a control, a split, or a resolution change. The mea
 from the study is the only number that has survived scrutiny, and it is far too small to trade
 profitably at any account size this project can reach.
 
+## The one thing that survived everything: the deterministic reversal rule
+
+Every LLM-driven variant in this repo has failed its controls. The formula has not. After fixing
+the fill model and running the falsification suite, the deterministic reversal scanner produces:
+
+| check | result |
+|---|---|
+| 60 sessions, 5m, 4 symbols | **+4.09%** at the shipped 10% notional cap, PF 1.58 |
+| controls (flipped / random) | flipped **−0.98%**, random +0.76% — correctly ordered and symmetric |
+| walk-forward: priors from sessions 1-38, tested on 39-60 | **+2.46%**, 57.0% win rate, PF 2.47 |
+| same signals, exits resolved on 1m bars instead of 5m | **62.9% win rate**, PF 2.85 |
+| full notional deployment (100%, no leverage) | **+32.9%**, 52.2% win rate, PF 1.89, max DD 2.7% |
+
+A 52% hit rate against the 33.3% a random walk gives at a 2:1 target:stop is the edge, and it is
+directional: inverting it loses, randomising it goes flat. Three independent checks agree.
+
+### The catch, and it is the whole catch
+
+The result is extremely cost-sensitive, because a 1-ATR stop on a 5-minute bar means the average
+trade is over in about three minutes and pays the spread on every round trip:
+
+| round-trip cost | net over 60 sessions | profit factor |
+|---|---|---|
+| 3 bps | +32.9% | 1.89 |
+| 6 bps | +27.4% | 1.71 |
+| 10 bps | +16.8% | 1.41 |
+| 16 bps | +4.6% | 1.10 |
+| **24 bps** | **−12.6%** | 0.74 |
+
+Break-even is around **16 bps round trip**. TQQQ trades one to three cents wide on a ~$70 price,
+which is roughly 4-6 bps round trip, so the realistic expectation sits in the +27% row — but with
+only a 2-3x margin to break-even, and with 78% of the trades in TQQQ, the widest-spread instrument
+in the basket. Every basis point of worse execution costs about 2% of the result.
+
+### What this means for the architecture
+
+**Remove the LLM from the trade decision.** This is the conclusion the whole project has been
+walking towards. The same idea expressed as a formula returns +27-33% over three months; expressed
+as an LLM reading a dashboard it returned nothing, and its theses contradicted its own actions. The
+LLM's comparative advantage is unstructured text, not arithmetic on RSI tables, and here the
+arithmetic wins. Keep the model for news if you want it; take it out of the entry decision.
+
+Second: **the shipped `max_notional_pct: 10` is silently starving the strategy.** With a 1-ATR stop,
+the risk-based size wants about 147% of equity of notional, so the 10% cap binds and every trade runs
+at 0.04% risk instead of the configured 0.25%. Raising it to 100% requires no leverage and reaches
+the intended risk budget. That is a risk decision, not a free parameter, and it is why the returns
+looked tiny for so long.
+
+Third, the honest caveats. Strategy parameters (`min_score=60`, 1-ATR stop, 2-ATR target) were chosen
+while looking at this data, so the strategy-level walk-forward is incomplete even though the priors
+were properly held out. Sixty sessions of one regime is not a cycle. 78% of the profit comes from one
+leveraged ETF. And none of this has been run against live fills, where the spread is the assumption
+most likely to be wrong.
+
 ## Honest limits
 
 - **A profitable-looking replay is not evidence of edge.** These runs cover single sessions with

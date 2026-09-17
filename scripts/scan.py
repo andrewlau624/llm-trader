@@ -40,6 +40,28 @@ def timeframes_for(granularity):
     return ("5m", "15m", "1h") if granularity == "5m" else ("1m", "5m", "1h")
 
 
+def apply_control(cand, control):
+    if control == "flip":
+        atr = abs(cand.entry - cand.stop)
+        if cand.direction == "long":
+            return replace(cand, direction="short", stop=cand.entry + atr,
+                           take_profit=cand.entry - 2 * atr,
+                           reason="CONTROL: direction inverted")
+        return replace(cand, direction="long", stop=cand.entry - atr,
+                       take_profit=cand.entry + 2 * atr,
+                       reason="CONTROL: direction inverted")
+    if control == "random":
+        import random as _random
+
+        side = _random.choice(["long", "short"])
+        atr = abs(cand.entry - cand.stop)
+        stop = cand.entry + (atr if side == "short" else -atr)
+        target = cand.entry + (-2 * atr if side == "short" else 2 * atr)
+        return replace(cand, direction=side, stop=stop, take_profit=target,
+                       reason="CONTROL: random direction")
+    return cand
+
+
 def load_bars(feed, symbols, granularity):
     out = {}
     period = "60d" if granularity == "5m" else "7d"
@@ -55,10 +77,26 @@ def load_bars(feed, symbols, granularity):
     return out
 
 
-def simulate(feed, cfg, symbols, granularity, priors, interval=5, control=None):
+def simulate(feed, cfg, symbols, granularity, priors, interval=5, control=None,
+             start=None, end=None, resolve=None):
     bars_by_symbol = load_bars(feed, symbols, granularity)
     if not bars_by_symbol:
         raise SystemExit("no bars for any symbol")
+    resolve_bars = {}
+    if resolve:
+        for sym in bars_by_symbol:
+            try:
+                rb = feed.bars(sym, tf=resolve, limit=100000, cache_age_s=3600, period="7d")
+            except Exception:
+                rb = []
+            if rb:
+                resolve_bars[sym] = sorted(rb, key=lambda b: b.ts)
+        if resolve_bars:
+            print(f"  exits resolved on {resolve} bars for symbols: "
+                  f"{', '.join(sorted(resolve_bars))}")
+            covered = {b.et.date() for b in next(iter(resolve_bars.values()))}
+            print(f"  {resolve} data covers {len(covered)} sessions: "
+                  f"{min(covered)} to {max(covered)}")
     tfs = timeframes_for(granularity)
     account = LocalAccount(cfg.equity)
     brokers = {sym: SimBroker(cfg, account=account) for sym in bars_by_symbol}
@@ -71,90 +109,92 @@ def simulate(feed, cfg, symbols, granularity, priors, interval=5, control=None):
     sessions = sorted({b.et.date() for b in reference})
     tz = reference[0].et.tzinfo
 
+    days_run = []
     for day in sessions:
+        if start and str(day) < start:
+            continue
+        if end and str(day) > end:
+            continue
         if not [b for b in reference if b.et.date() == day]:
             continue
+        if resolve_bars and day not in {b.et.date() for b in next(iter(resolve_bars.values()))}:
+            continue
+        days_run.append(day)
         account.start_day(day, account.equity)
         stamps = sorted({b.ts for b in reference if b.et.date() == day})
         for ts in stamps:
             now = to_utc(ts)
-            emitted = []
-            for sym, bars in bars_by_symbol.items():
+            et = now.astimezone(tz)
+
+            # PHASE 1 - decide, then submit, using only completed bars strictly before `now`.
+            # The order then fills at the open of the bar starting at `now`, which is the same
+            # price the signal was computed from. Deciding and filling at the same timestamp is
+            # what a real system does; any delay between them is a latency the strategy does not
+            # actually have, and it silently moved the entry closer to one bracket leg.
+            if (
+                et.minute % interval == 0
+                and account.position is None
+                and minutes_from_open(now) >= cfg.no_entry_first_min
+                and minutes_to_close(now) >= cfg.no_entry_last_min + 5
+            ):
+                picks = []
+                for sym, bars in bars_by_symbol.items():
+                    window = [b for b in bars if to_utc(b.ts) <= now][-TAIL:]
+                    if len(window) < 60:
+                        continue
+                    try:
+                        ctx = build_context(sym, window, now, timeframes=tfs)
+                    except Exception:
+                        continue
+                    if ctx.session is None or ctx.price is None:
+                        continue
+                    scored = score_context(ctx, getattr(ctx, "frames", None))
+                    cand = evaluate(ctx, scored, priors=priors, cfg=cfg)
+                    if cand:
+                        picks.append((cand, ctx))
+                candidates += len(picks)
+                if picks:
+                    picks.sort(key=lambda p: -(p[0].expected_bps * p[0].score))
+                    cand, ctx = picks[0]
+                    cand = apply_control(cand, control)
+                    decision = Decision(
+                        action="enter_long" if cand.direction == "long" else "enter_short",
+                        confidence=min(10, max(1, int(cand.score / 10))),
+                        entry=cand.entry,
+                        stop_loss=cand.stop,
+                        take_profit=cand.take_profit,
+                        size_multiplier=1.0,
+                        max_hold_minutes=cfg.max_hold_min,
+                        thesis=cand.reason,
+                        invalidation="price keeps going instead of snapping back to the mean",
+                    )
+                    decision.regime = ctx.regime
+                    verdict = check(decision, ctx, account.snapshot(ctx.price), cfg)
+                    if verdict.allowed:
+                        brokers[cand.symbol].submit(decision, verdict.size, now)
+
+            # PHASE 2 - advance every broker through the bars up to `now`. This fills the order
+            # just submitted, at the open of the bar at `now`, and manages any open position.
+            for sym in bars_by_symbol:
                 broker = brokers[sym]
-                while cursors[sym] < len(bars) and to_utc(bars[cursors[sym]].ts) <= now:
-                    broker.process_bar(bars[cursors[sym]])
+                series = resolve_bars.get(sym) or bars_by_symbol[sym]
+                while cursors[sym] < len(series) and to_utc(series[cursors[sym]].ts) <= now:
+                    broker.process_bar(series[cursors[sym]])
                     cursors[sym] += 1
                 new = broker.trades[tracked[sym]:]
                 tracked[sym] = len(broker.trades)
-                emitted.extend(new)
-            trades.extend(emitted)
-
-            et = now.astimezone(tz)
-            if et.minute % interval:
-                continue
-            if account.position is not None:
-                continue
-            if minutes_from_open(now) < cfg.no_entry_first_min:
-                continue
-            if minutes_to_close(now) < cfg.no_entry_last_min + 5:
-                continue
-
-            picks = []
-            for sym, bars in bars_by_symbol.items():
-                upto = [b for b in bars if to_utc(b.ts) <= now]
-                window = upto[-TAIL:]
-                if len(window) < 60:
-                    continue
-                try:
-                    ctx = build_context(sym, window, now, timeframes=tfs)
-                except Exception:
-                    continue
-                if ctx.session is None or ctx.price is None:
-                    continue
-                scored = score_context(ctx, getattr(ctx, "frames", None))
-                cand = evaluate(ctx, scored, priors=priors, cfg=cfg)
-                if cand:
-                    picks.append((cand, ctx))
-            candidates += len(picks)
-            if not picks:
-                continue
-            picks.sort(key=lambda p: -(p[0].expected_bps * p[0].score))
-            cand, ctx = picks[0]
-            if control == "flip":
-                cand = replace(cand, direction="short" if cand.direction == "long" else "long",
-                               reason="CONTROL: direction inverted")
-                atr = abs(cand.entry - cand.stop)
-                if cand.direction == "long":
-                    cand = replace(cand, stop=cand.entry - atr, take_profit=cand.entry + 2 * atr)
-                else:
-                    cand = replace(cand, stop=cand.entry + atr, take_profit=cand.entry - 2 * atr)
-            elif control == "random":
-                import random as _random
-
-                side = _random.choice(["long", "short"])
-                atr = abs(cand.entry - cand.stop)
-                cand = replace(
-                    cand, direction=side, reason="CONTROL: random direction",
-                    stop=cand.entry + (atr if side == "short" else -atr),
-                    take_profit=cand.entry + (-2 * atr if side == "short" else 2 * atr),
-                )
-            decision = Decision(
-                action="enter_long" if cand.direction == "long" else "enter_short",
-                confidence=min(10, max(1, int(cand.score / 10))),
-                entry=cand.entry,
-                stop_loss=cand.stop,
-                take_profit=cand.take_profit,
-                size_multiplier=1.0,
-                max_hold_minutes=cfg.max_hold_min,
-                thesis=cand.reason,
-                invalidation="price keeps going instead of snapping back to the mean",
-            )
-            decision.regime = ctx.regime
-            verdict = check(decision, ctx, account.snapshot(ctx.price), cfg)
-            if not verdict.allowed:
-                continue
-            brokers[cand.symbol].submit(decision, verdict.size, now)
-    return trades, candidates, sessions
+                trades.extend(new)
+    if resolve_bars:
+        for sym in bars_by_symbol:
+            series = resolve_bars.get(sym) or bars_by_symbol[sym]
+            broker = brokers[sym]
+            while cursors[sym] < len(series):
+                broker.process_bar(series[cursors[sym]])
+                cursors[sym] += 1
+            new = broker.trades[tracked[sym]:]
+            tracked[sym] = len(broker.trades)
+            trades.extend(new)
+    return trades, candidates, days_run
 
 
 def report(trades, candidates, sessions, symbols, equity, configured_risk_pct=0.25):
@@ -203,6 +243,18 @@ def main(argv=None):
     ap.add_argument("--symbols", default="SPY,QQQ,IWM")
     ap.add_argument("--granularity", default="5m", choices=["1m", "5m"])
     ap.add_argument("--equity", type=float, default=None)
+    ap.add_argument("--from", dest="start", default=None, help="first session YYYY-MM-DD")
+    ap.add_argument("--to", dest="end", default=None, help="last session YYYY-MM-DD")
+    ap.add_argument("--priors", default=None, help="path to a priors file to use")
+    ap.add_argument("--notional-pct", type=float, default=None,
+                    help="override max_notional_pct: how much notional per trade relative to "
+                         "equity. 10 = cap, 100 = fully deployed, above 100 = leverage.")
+    ap.add_argument("--slippage-bps", type=float, default=None,
+                    help=r"slippage per side in bps. TQQQ trades 1-3 cents wide on ~$70, which is "
+                         "2-5 bps per side, so the default 1.5 is optimistic for it.")
+    ap.add_argument("--resolve", default=None, choices=["1m"],
+                    help="keep the decision granularity but resolve fills and exits on finer bars. "
+                         "Isolates exit resolution from signal generation.")
     ap.add_argument("--control", default=None, choices=["flip", "random"],
                     help="sanity check: same mechanics, direction flipped or randomised. "
                          "If a control also makes money, the simulation is flattering itself.")
@@ -211,13 +263,21 @@ def main(argv=None):
     cfg = Config.load()
     if args.equity:
         cfg.equity = args.equity
-    priors = load_priors()
+    if args.notional_pct is not None:
+        cfg.max_notional_pct = args.notional_pct
+    if args.slippage_bps is not None:
+        cfg.slippage_bps = args.slippage_bps
+    priors = load_priors(args.priors)
     feed = get_feed("yfinance", frozen=True)
     print(f"\ndeterministic scan: {', '.join(symbols)} | {args.granularity} | equity "
-          f"${cfg.equity:,.0f} | priors {'loaded' if priors else 'MISSING (run make study)'}"
+          f"${cfg.equity:,.0f} | notional cap {cfg.max_notional_pct:.0f}%/trade "
+          f"| priors {'loaded' if priors else 'MISSING (run make study)'}"
+          f" | window {args.start or 'start'}..{args.end or 'end'}"
+          f"{' | resolving exits on ' + args.resolve if args.resolve else ''}"
           f"{' | CONTROL=' + args.control if args.control else ''}")
     trades, candidates, sessions = simulate(
-        feed, cfg, symbols, args.granularity, priors, control=args.control
+        feed, cfg, symbols, args.granularity, priors, control=args.control,
+        start=args.start, end=args.end, resolve=args.resolve,
     )
     report(trades, candidates, sessions, symbols, cfg.equity, cfg.risk_per_trade_pct)
     out = ROOT / "runs" / "scan-trades.json"

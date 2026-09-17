@@ -193,6 +193,10 @@ def main(argv=None):
     ap.add_argument("--compare", default=None,
                     help="comma separated symbols: rank them by measured edge instead of "
                          "studying one in depth")
+    ap.add_argument("--train-until", default=None,
+                    help="only use sessions up to this date when writing priors, so the priors "
+                         "cannot have seen the period they will be tested on")
+    ap.add_argument("--priors-out", default=None, help="path for --write-priors output")
     ap.add_argument("--write-priors", action="store_true",
                     help="write llmtrader/empirical_priors.json for the prompt to quote")
     args = ap.parse_args(argv)
@@ -367,9 +371,15 @@ def main(argv=None):
         from llmtrader.analysis import build_priors
         from llmtrader.priors import DEFAULT_PATH
 
-        priors = build_priors(rows, horizons, symbol, args.granularity)
-        DEFAULT_PATH.write_text(json.dumps(priors, indent=2))
-        print(f"\nwrote priors to {DEFAULT_PATH}")
+        train = rows
+        if args.train_until:
+            train = [r for r in rows if r["day"] <= args.train_until]
+            print(f"\n  training priors on sessions up to {args.train_until}: "
+                  f"{len(train)} of {len(rows)} windows")
+        priors = build_priors(train, horizons, symbol, args.granularity)
+        out_path = Path(args.priors_out) if args.priors_out else DEFAULT_PATH
+        out_path.write_text(json.dumps(priors, indent=2))
+        print(f"wrote priors to {out_path}")
 
     out = args.out or str(ROOT / "runs" / f"signal-study-{args.granularity}.json")
     Path(out).parent.mkdir(parents=True, exist_ok=True)

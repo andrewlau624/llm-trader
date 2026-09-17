@@ -119,6 +119,10 @@ def main(argv=None):
     ap.add_argument("--model", default=None)
     ap.add_argument("--backend", default=None, choices=["ollama", "deepseek", "opencode-go"])
     ap.add_argument("--interval", type=int, default=None)
+    ap.add_argument("--notional-pct", type=float, default=None,
+                    help="notional per trade as a percent of equity. The shipped 10%% is the "
+                         "bug this repo found: a 1-ATR stop wants ~147%%, so the cap binds and "
+                         "every trade runs at 0.04%% risk instead of the configured 0.25%%.")
     ap.add_argument("--once", action="store_true", help="run one decision cycle and exit")
     ap.add_argument("--force", action="store_true", help="ignore the market-hours check")
     ap.add_argument(
@@ -139,6 +143,8 @@ def main(argv=None):
         cfg.llm_backend = args.backend
     if args.interval:
         cfg.decision_interval_min = args.interval
+    if args.notional_pct is not None:
+        cfg.max_notional_pct = args.notional_pct
     if args.gate:
         cfg.llm_gate = True
     if args.source:

@@ -104,3 +104,47 @@ def test_alpaca_refuses_a_sub_share_position_instead_of_rounding_up():
     midday = datetime(2026, 9, 16, 15, 0, tzinfo=timezone.utc)
     with pytest.raises(BrokerError, match="whole"):
         broker.submit(decision, 0.133, midday)
+
+
+def test_alpaca_reanchors_the_bracket_to_the_live_price():
+    """The legs must travel with the fill. Left on the signal price, entries where price ran
+    get refused - and those are selectively the ones that would have stopped out."""
+    from datetime import datetime, timezone
+
+    from llmtrader.broker.accounting import LocalAccount
+    from llmtrader.broker.alpaca import AlpacaBroker
+    from llmtrader.config import Config
+    from llmtrader.trader import Decision
+
+    cfg = Config()
+    cfg.symbols = ["SPY"]
+    broker = AlpacaBroker.__new__(AlpacaBroker)
+    broker.cfg = cfg
+    broker.events = []
+    broker.api_key = "x"
+    broker.secret_key = "y"
+    broker.book = LocalAccount(100000.0, authoritative_equity=True)
+    broker.open_entries = {}
+    broker.open_entry = None
+    broker.trades = []
+    broker.live_price = lambda symbol=None: 100.5
+    submitted = {}
+
+    class FakeOrder:
+        id = "fake-1"
+
+    def fake_submit(req):
+        submitted["req"] = req
+        return FakeOrder()
+
+    broker.client = type("C", (), {"submit_order": staticmethod(fake_submit)})()
+    decision = Decision(action="enter_long", confidence=9, entry=100.0, stop_loss=99.0,
+                        take_profit=102.0, size_multiplier=1.0, max_hold_minutes=60)
+    decision.symbol = "SPY"
+    midday = datetime(2026, 9, 16, 15, 0, tzinfo=timezone.utc)
+    broker.submit(decision, 100.0, midday)
+    assert decision.stop_loss == 99.5
+    assert decision.take_profit == 102.5
+    assert abs(decision.entry - decision.stop_loss) == 1.0
+    assert abs(decision.take_profit - decision.entry) == 2.0
+    assert any(e["event"] == "bracket_reanchored" for e in broker.events)

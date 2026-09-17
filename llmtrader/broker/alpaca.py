@@ -295,6 +295,25 @@ class AlpacaBroker:
                 {"event": "live_price_unavailable", "error": str(e)[:200],
                  "ts": now.isoformat()}
             )
+        signal_price = decision.entry
+        if base_price and signal_price:
+            # Re-anchor the bracket to the live price, preserving the intended distances. The
+            # decision was written against the last completed bar's close; the market order fills
+            # seconds later at the live price. Leaving the legs on the signal price would refuse
+            # precisely those entries where price ran, which are the ones most likely to have
+            # stopped out, and would quietly flatter the live sample.
+            stop_offset = decision.stop_loss - signal_price
+            target_offset = decision.take_profit - signal_price
+            decision.stop_loss = round(base_price + stop_offset, 2)
+            decision.take_profit = round(base_price + target_offset, 2)
+            decision.entry = round(base_price, 4)
+            self.events.append({
+                "ts": now.isoformat(), "event": "bracket_reanchored",
+                "signal_price": round(signal_price, 4),
+                "live_price": round(base_price, 4),
+                "drift_bps": round((base_price - signal_price) / signal_price * 10000.0, 2),
+                "stop": decision.stop_loss, "take_profit": decision.take_profit,
+            })
         if base_price and size < 1.0:
             raise BrokerError(
                 f"position size is {size:.3f} shares but Alpaca bracket orders only accept whole "

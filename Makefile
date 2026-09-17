@@ -32,7 +32,7 @@ REPLAY_FLAGS = $(if $(DATE),--date $(DATE),--days $(DAYS)) --symbol $(SYMBOL) \
                $(if $(filter 1,$(GATE)),--gate,)
 
 .DEFAULT_GOAL := help
-.PHONY: help setup check test lint fmt replay backtest report study study-1m economics scan controls paper once live stop status logs clean
+.PHONY: help setup check test lint fmt replay backtest report study study-1m economics scan controls week week-report mc paper once live stop status logs clean
 
 help:
 	@echo ""
@@ -50,6 +50,9 @@ help:
 	@echo "  make economics   what it could make and cost  e.g. make economics EQUITY=5000"
 	@echo "  make scan        deterministic reversal scanner across a basket"
 	@echo "  make controls    sanity-check the simulator (flip/random/resolution)"
+	@echo "  make mc          Monte Carlo over the trade sequence"
+	@echo "  make week        start the week-long forward paper test (deterministic)"
+	@echo "  make week-report slippage and realized edge from the week just run"
 	@echo ""
 	@echo "  make paper       paper loop, simulated fills, live data, no account"
 	@echo "  make once        one decision cycle now, then exit"
@@ -89,6 +92,16 @@ report:
 
 status:
 	@$(PY) scripts/status.py
+
+# the week-long forward test: deterministic rule, Alpaca paper, full risk budget
+week:
+	@nohup caffeinate -s bash scripts/supervise.sh --notional-pct $(NOTIONAL) >> /tmp/llmtrader-live.log 2>&1 & echo "started; log: /tmp/llmtrader-live.log"
+
+week-report:
+	@$(PY) scripts/week.py
+
+mc:
+	$(PY) scripts/mc.py --paths 20000
 
 study:
 	$(PY) scripts/study.py --granularity 5m --write-priors

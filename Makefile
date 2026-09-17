@@ -129,7 +129,12 @@ lint:
 
 week:
 	@$(PY) scripts/preflight.py
-	@nohup caffeinate -s bash scripts/supervise.sh --notional-pct $(NOTIONAL) >> /tmp/llmtrader-live.log 2>&1 & echo "  started, restarting itself if it dies"
+	@if command -v caffeinate >/dev/null 2>&1; then \
+		nohup caffeinate -s bash scripts/supervise.sh --notional-pct $(NOTIONAL) >> /tmp/llmtrader-live.log 2>&1 & \
+	else \
+		nohup bash scripts/supervise.sh --notional-pct $(NOTIONAL) >> /tmp/llmtrader-live.log 2>&1 & \
+	fi
+	@echo "  started, restarting itself if it dies"
 	@echo "  log:     tail -f /tmp/llmtrader-live.log"
 	@echo "  status:  make status"
 

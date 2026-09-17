@@ -17,19 +17,23 @@ def sh(cmd):
 
 def main():
     problems, warnings = [], []
-    power = sh(["pmset", "-g", "ps"]).splitlines()
-    head = power[0] if power else ""
-    if "AC Power" in head:
-        print("  ok    on AC power")
+    head = ""
+    if shutil.which("pmset"):
+        power = sh(["pmset", "-g", "ps"]).splitlines()
+        head = power[0] if power else ""
+        if "AC Power" in head:
+            print("  ok    on AC power")
+        else:
+            warnings.append(
+                "on battery (" + (head[:60] if head else "unknown") + "). caffeinate -s holds "
+                "its anti-sleep assertion only on AC. The loop will pause when the machine "
+                "sleeps, and closing the lid sleeps it anyway. Plug in or use a server "
+                "(docs/remote.md)."
+            )
+        if head:
+            print(f"  info  power: {head[:70]}")
     else:
-        warnings.append(
-            "on battery (" + (head[:60] if head else "unknown") + "). caffeinate -s holds its "
-            "anti-sleep assertion only on AC. The loop will pause when the machine sleeps, and "
-            "closing the lid sleeps it anyway. For an unbroken week, plug in or use a VPS "
-            "(docs/remote.md)."
-        )
-    if head:
-        print(f"  info  power: {head[:70]}")
+        print("  info  power: not a laptop, or no pmset (fine on Linux)")
 
     from llmtrader.config import alpaca_keys
 
@@ -66,7 +70,8 @@ def main():
             f"--notional-pct 100 (make week does)."
         )
     if not shutil.which("caffeinate"):
-        warnings.append("caffeinate not found; the machine will sleep")
+        print("  info  caffeinate absent (Linux). make week runs without it; "
+              "make service is the better option here")
 
     print()
     for w in warnings:

@@ -61,6 +61,26 @@ installing.
 `-u` in the ExecStart is required: without it Python buffers stdout and the log stays empty for
 hours.
 
+`make week` also works on Linux — it uses `caffeinate` only if present, since that is macOS-only.
+On a server, prefer `make service`: systemd handles restarts natively and survives reboots, which
+`supervise.sh` does not.
+
+## Data source: pick deliberately
+
+`make check` reports whichever feed `data_source` names. The two differ in ways that matter here:
+
+| | yfinance | alpaca (IEX) |
+|---|---|---|
+| history | premarket included, 3 sessions of 1m | RTH only |
+| volume | full consolidated tape | ~2-3% of the tape |
+| from a datacenter IP | rate-limited or blocked | fine |
+| matches the backtest | yes, the priors were built on it | 35/36 direction agreement |
+
+The priors and the 60-session backtest were built on **yfinance** data, so on a residential or home
+server leaving `data_source: yfinance` is the more consistent choice. On a hosted VPS, switch to
+`alpaca` — being blocked mid-week is the worse problem, and the measured direction agreement says
+the strategy survives the narrower tape.
+
 ### Why a server is the right place for this
 
 - **Brackets live on Alpaca's side.** If the process dies mid-position, the stop and target still

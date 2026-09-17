@@ -148,3 +148,40 @@ def test_alpaca_reanchors_the_bracket_to_the_live_price():
     assert abs(decision.entry - decision.stop_loss) == 1.0
     assert abs(decision.take_profit - decision.entry) == 2.0
     assert any(e["event"] == "bracket_reanchored" for e in broker.events)
+
+
+def test_daily_risk_state_survives_a_restart(tmp_path):
+    """A crash must not reset trades_today or day_start_equity, or the daily loss halt silently
+    stops working on an unattended run."""
+    from datetime import date
+
+    from llmtrader.broker.accounting import LocalAccount
+
+    acct = LocalAccount(100000.0, authoritative_equity=True)
+    acct.start_day(date(2026, 9, 16), 100000.0)
+    acct.trades_today = 5
+    acct.consecutive_losses = 3
+    acct.halted = True
+    acct.halt_reason = "daily loss limit hit"
+    acct.set_balance(98000.0)
+    saved = acct.state()
+
+    fresh = LocalAccount(100000.0, authoritative_equity=True)
+    assert fresh.restore(saved)
+    assert fresh.day == date(2026, 9, 16)
+    assert fresh.trades_today == 5
+    assert fresh.consecutive_losses == 3
+    assert fresh.halted
+    assert fresh.day_start_equity == 100000.0
+    assert fresh.day_pnl == -2000.0
+
+
+def test_restore_tolerates_a_bad_state_file():
+    from llmtrader.broker.accounting import LocalAccount
+
+    acct = LocalAccount(100000.0)
+    assert acct.restore(None) is False
+    assert acct.restore({}) is False
+    assert acct.restore({"day": "not-a-date", "trades_today": 2}) is True
+    assert acct.trades_today == 2
+    assert acct.day is None

@@ -8,3 +8,4 @@ data/cache/
 *.pkl
 .DS_Store
 .ruff_cache/
+state/

@@ -1,3 +1,5 @@
+from datetime import date
+
 from .base import AccountState
 
 
@@ -74,6 +76,44 @@ class LocalAccount:
             self.equity = self.start_equity + self.realized_pnl + unrealized
         self.refresh_day_pnl()
         return self.equity
+
+    def state(self):
+        """Everything that must survive a restart. Losing trades_today or day_start_equity on a
+        crash silently resets the daily loss halt, which is the guard most likely to matter on an
+        unattended run."""
+        return {
+            "day": self.day.isoformat() if hasattr(self.day, "isoformat") else (
+                str(self.day) if self.day else None
+            ),
+            "equity": self.equity,
+            "day_start_equity": self.day_start_equity,
+            "start_equity": self.start_equity,
+            "realized_pnl": self.realized_pnl,
+            "trades_today": self.trades_today,
+            "consecutive_losses": self.consecutive_losses,
+            "wins": self.wins,
+            "losses": self.losses,
+            "halted": self.halted,
+            "halt_reason": self.halt_reason,
+        }
+
+    def restore(self, state):
+        if not state:
+            return False
+        raw_day = state.get("day")
+        if raw_day:
+            try:
+                self.day = date.fromisoformat(str(raw_day))
+            except ValueError:
+                self.day = None
+        for key in ("equity", "day_start_equity", "start_equity", "realized_pnl", "trades_today",
+                    "consecutive_losses", "wins", "losses"):
+            if state.get(key) is not None:
+                setattr(self, key, state[key])
+        self.halted = bool(state.get("halted", False))
+        self.halt_reason = state.get("halt_reason", "") or ""
+        self.refresh_day_pnl()
+        return True
 
     def snapshot(self, price=None):
         if price is not None:

@@ -1,40 +1,70 @@
-# Running this on a remote host
+# Running on a server
 
-Short version: use a $5-12/month VPS, and **do not run the model on it.** Serve the model from an
-API instead. A GPU host that can serve a 7B model at usable speed costs 30-100x more per month than
-the API tokens this thing actually burns, and the token burn is small.
+**Yes, and this is the better way to do it.** The deterministic strategy has no model in the loop,
+so there is nothing to host but Python. A $5/month VPS is plenty. No GPU, no Ollama, no API tokens.
 
-## Why not local inference on a server
+(Versions of this project that ran the LLM path needed a model server. That constraint disappeared
+when the evidence said to take the model out of the entry decision.)
 
-| Option | Monthly | Notes |
-|---|---|---|
-| CPU-only VPS running qwen2.5:7b | $5-12 | ~5-15 tok/s. A 2,000-token prompt plus 300 tokens out is 40-90s per decision. Fits inside a 5-minute cycle, barely, with no headroom. |
-| GPU VPS (T4/A10) for local inference | $200-700 | Fast, and completely unjustifiable at these account sizes. |
-| Hosted API (DeepSeek direct) | **$0.01-0.30** | ~22 gated calls/day, ~2,000 tokens in and ~300 out each. |
+## What it needs
 
-For reference, the setup that inspired this spent about **$6/day** on tokens. That was a frontier
-model at 288 calls/day including the overnight session. With the gate (22 calls) and a cheap open
-model, the same work is roughly **$0.01/day**. The token bill is not the constraint; it only looks
-like one if you run an expensive model on every 5-minute window around the clock.
+| | |
+|---|---|
+| CPU | 1 vCPU. One decision cycle reads ~1,200 bars per symbol across 4 symbols and takes well under a second. |
+| RAM | 1 GB works, 2 GB comfortable. pandas plus a few thousand bars. |
+| Disk | 2 GB including the venv. |
+| Cost | $5-12/month |
+| Network | outbound HTTPS to Alpaca. |
 
-## What to change in `config.yaml`
+## Setup
 
-```yaml
-data_source: alpaca        # yfinance rate-limits and sometimes blocks datacenter IPs
-llm_backend: deepseek      # or opencode-go; not ollama, see above
-llm_gate: true             # 22 calls/day instead of 76, no measured loss of signal
-symbols: [SPY]
-extra_context_symbols: [QQQ, IWM, VIXY]
+```bash
+# on the server
+sudo adduser --disabled-password --gecos "" trader
+sudo -iu trader
+git clone https://github.com/andrewlau624/llm-trader /opt/llm-trader
+cd /opt/llm-trader
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
 ```
 
-Put the keys in `/etc/llm-trader.env` rather than a repo `.env`, and point the service at it.
+Put the keys somewhere root-owned rather than in the repo:
 
-## Install as a service
+```bash
+sudo tee /etc/llm-trader.env >/dev/null <<'EOF'
+ALPACA_API_KEY=...
+ALPACA_SECRET_KEY=...
+EOF
+sudo chmod 600 /etc/llm-trader.env
+sudo chown root:root /etc/llm-trader.env
+```
+
+Set the server-side config. **Use Alpaca for data, not yfinance**: yfinance scrapes Yahoo and gets
+rate-limited or blocked from datacenter IPs. Alpaca's free IEX feed was measured against yfinance
+across a full session and agreed on 35 of 36 candidate directions with near-identical candidate
+counts, so the volume ratios the strategy depends on survive the narrower tape.
+
+```yaml
+# config.yaml on the server
+data_source: alpaca
+strategy: deterministic
+basket: [SPY, QQQ, IWM, TQQQ]
+llm_gate: true
+```
+
+Build the priors file the rule needs, then verify:
+
+```bash
+.venv/bin/python scripts/study.py --granularity 5m --write-priors
+.venv/bin/python scripts/preflight.py
+```
+
+## Run it as a service
 
 ```ini
 # /etc/systemd/system/llm-trader.service
 [Unit]
-Description=llm-trader paper loop
+Description=llm-trader deterministic paper loop
 After=network-online.target
 Wants=network-online.target
 
@@ -43,11 +73,13 @@ Type=simple
 User=trader
 WorkingDirectory=/opt/llm-trader
 EnvironmentFile=/etc/llm-trader.env
-ExecStart=/opt/llm-trader/.venv/bin/python -u scripts/live.py --broker alpaca --gate --interval 5
+ExecStart=/opt/llm-trader/.venv/bin/python -u scripts/live.py \
+    --strategy deterministic --broker alpaca --notional-pct 100
 Restart=always
 RestartSec=30
 StandardOutput=append:/var/log/llm-trader.log
 StandardError=append:/var/log/llm-trader.log
+StateDirectory=llm-trader
 
 [Install]
 WantedBy=multi-user.target
@@ -59,29 +91,29 @@ sudo systemctl enable --now llm-trader
 journalctl -fu llm-trader
 ```
 
-Notes:
+`-u` is required: without it Python buffers stdout and the log stays empty for hours.
 
-- `-u` is required. Without it, Python buffers stdout and the log stays empty for hours.
-- `--broker alpaca` is the right choice on a server precisely because **the bracket orders live on
-  Alpaca's side**. If the process dies mid-position, the stop and target still exist. The sim broker
-  keeps its position in memory and would lose it on restart.
-- Timezone does not matter; the code works in ET internally.
+### Why a server is the right place for this
 
-## Checking on it
+- **Brackets live on Alpaca's side.** If the process dies mid-position, the stop and target still
+  exist. The sim broker keeps positions in memory and would lose them on a restart.
+- **`Restart=always` covers crashes**, which is the failure mode a VPS actually has. A laptop has
+  sleep, lid close and battery instead, and none of those are fixable in code.
+- **The daily risk state is persisted** to `state/book.json` (`StateDirectory` above), so a restart
+  mid-session does not reset `trades_today` or `day_start_equity` — which would otherwise silently
+  disable the daily loss halt.
+
+## Watching it
 
 ```bash
-python scripts/status.py       # running? what has it decided? what does it hold?
-python scripts/report.py       # full stats once there are trades
+python scripts/status.py        # running? decided? holding?
+python scripts/week.py          # execution cost and realized edge, aggregated
 tail -f /var/log/llm-trader.log
 ```
 
-## Before you point real money at it
+## Before pointing real money at it
 
-The signal study puts the measured edge at roughly **5 bps per trade**, which on any account size
-you are likely to deploy works out to about **0.2% per month** — smaller than the noise of a single
-month and smaller than the risk-free rate. Run `python scripts/economics.py --equity <n>` and read
-the months-to-significance line before deciding that hosting it is worth the effort.
-
-The honest use of a remote host is to **collect a paper track record for free**. Paper trading costs
-nothing but the VPS, and a few months of it is the only thing that can tell you whether the measured
-lean survives out of sample.
+The measured edge is roughly 15.6 bps per trade with break-even near 16 bps round trip, and the
+whole question is what live fills actually cost. That is what `scripts/week.py` measures, from the
+`fill_vs_signal` events the broker writes. Run `python scripts/economics.py --equity <n>` too: at
+small account sizes the whole-share requirement and the notional cap dominate everything else.

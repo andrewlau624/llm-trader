@@ -1,4 +1,6 @@
+import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from ..data.base import in_rth, to_utc
 from ..risk import update_halt
@@ -50,6 +52,11 @@ class AlpacaBroker:
         self.data_client = None
         self.cfg = cfg
         self.book = account or LocalAccount(cfg.equity, authoritative_equity=True)
+        from ..config import ROOT
+
+        self.state_path = Path(ROOT) / "state" / "book.json"
+        self._restore_state()
+        self._measured = set()
         self.open_entry = None
         self.open_entries = {}
         self.trades = []
@@ -58,6 +65,24 @@ class AlpacaBroker:
 
     def _api_account(self):
         return self.client.get_account()
+
+    def _restore_state(self):
+        if not self.state_path.exists():
+            return
+        try:
+            self.book.restore(json.loads(self.state_path.read_text()))
+            self.events.append({"event": "state_restored", "day": str(self.book.day),
+                                "trades_today": self.book.trades_today,
+                                "halted": self.book.halted})
+        except Exception as e:
+            self.events.append({"event": "state_restore_failed", "error": str(e)[:200]})
+
+    def _save_state(self):
+        try:
+            self.state_path.parent.mkdir(parents=True, exist_ok=True)
+            self.state_path.write_text(json.dumps(self.book.state(), indent=2))
+        except Exception as e:
+            self.events.append({"event": "state_save_failed", "error": str(e)[:200]})
 
     def live_price(self, symbol=None):
         from alpaca.data.historical import StockHistoricalDataClient
@@ -198,6 +223,7 @@ class AlpacaBroker:
                 self.trades.append(closed)
                 self.book.close_position(closed)
                 update_halt(self.book, self.cfg)
+                self._save_state()
                 self.events.append({
                     "ts": now.isoformat(),
                     "event": f"exit_{closed.exit_reason}",
@@ -397,6 +423,7 @@ class AlpacaBroker:
             self.book.set_balance(float(acct.equity))
         except Exception:
             self.book.refresh_day_pnl()
+        self._save_state()
         return self.book.snapshot()
 
     def forced_exit_due(self, now, price):

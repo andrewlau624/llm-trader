@@ -383,12 +383,16 @@ rewording, and it is the honest ceiling of what this data can tell us.
 make economics EQUITY=1000     # what it could make, what it costs, how long to prove it
 ```
 
-**Do not run the model on the server.** A GPU host that serves a 7B model at usable speed costs
-$200-700/month; the same work through a cheap hosted API is about **$0.01-0.30/month** at 22 gated
-calls a day. Run a $5-12/month VPS for the bot and call the API. Use `--broker alpaca` on a server
-specifically because the brackets live on Alpaca's side and survive the process dying, which the
-memory-resident sim broker does not. Full walkthrough including the systemd unit:
-[docs/remote.md](docs/remote.md).
+**The deterministic strategy runs on a $5-12/month VPS with no model to host.** Take the LLM out of
+the loop and the constraint that made this awkward disappears: nothing but Python and outbound
+HTTPS to Alpaca. 1 vCPU, 1 GB RAM, no GPU, no API tokens.
+
+Use `--broker alpaca` because the brackets live on Alpaca's side and survive the process dying,
+which the memory-resident sim broker does not. Use `data_source: alpaca` rather than yfinance,
+which gets rate-limited from datacenter IPs: the IEX feed was measured against yfinance across a
+full session and agreed on 35 of 36 candidate directions. Daily risk state is persisted to
+`state/book.json` so a restart does not silently reset the daily loss halt. Full walkthrough with
+the systemd unit: [docs/remote.md](docs/remote.md).
 
 ## Why I am not claiming a gain from the scanner
 

@@ -501,6 +501,42 @@ were properly held out. Sixty sessions of one regime is not a cycle. 78% of the 
 leveraged ETF. And none of this has been run against live fills, where the spread is the assumption
 most likely to be wrong.
 
+## Monte Carlo, cost surface, and the parameter plateau
+
+`make mc` resamples the trade sequence. Mean-shifted for the null rather than scaled, because
+scaling by zero erases the variance and quietly reports zero risk. The null calibrates correctly,
+which is what makes the rest of it readable: **median 0.0%, P(losing period) 50.2%.**
+
+| scenario | median return | dd p50 | dd p95 | P(losing) |
+|---|---|---|---|---|
+| observed edge | +32.9% | 2.4% | 3.8% | 0.0% |
+| **half** the edge | +16.5% | 3.6% | 6.4% | 0.7% |
+| **none** of it (the null) | −0.0% | 7.2% | 14.2% | 50.2% |
+| signal inverted | −32.8% | 33.8% | 44.2% | 100% |
+
+It degrades gracefully: at half the measured edge the strategy still returns +16.5% over the period
+at a 0.7% chance of a losing quarter. P(mean trade ≤ 0) = 0.0%, t = +5.02 on the observed sequence.
+Costs remain the binding risk: 10 bps worse per round trip still leaves a +11.7% median but pushes
+P(losing) to 3.6% and the worst drawdown to 15.5%.
+
+**Parameter plateau.** 12 configurations of conviction floor and bracket width, all positive, with
+smooth monotonic responses rather than jagged ones — a plateau, not a spike:
+
+| min_score | bracket | trades | win rate | net | PF |
+|---|---|---|---|---|---|
+| 50 | 1.0 / 2.0 | 275 | 50.5% | +30.8% | 1.82 |
+| 60 | 1.0 / 2.0 | 278 | 52.2% | +32.9% | 1.89 |
+| 70 | 1.0 / 2.0 | 220 | 49.1% | +21.9% | 1.73 |
+| 80 | 1.0 / 2.0 | 187 | 47.1% | +14.1% | 1.55 |
+| 60 | 1.0 / 3.0 | 278 | 50.4% | +73.6% | 2.67 |
+| 60 | 0.7 / 1.4 | 290 | 43.8% | +12.5% | 1.32 |
+
+Wider targets dominate, which matches the study's finding that the effect grows with horizon. The
+3:1 column implies about 1.0R per trade, which is too large to accept on faith, so it ran its
+controls too: real 48.5% win rate versus random 33.9% and flipped 30.5%, both losing money. The
+gap between real and random is *wider* at 3:1 (14.6pp) than at 2:1 (12pp), which is the opposite of
+what decay looks like.
+
 ## Honest limits
 
 - **A profitable-looking replay is not evidence of edge.** These runs cover single sessions with

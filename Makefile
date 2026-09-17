@@ -140,9 +140,13 @@ live:
 		--backend $(BACKEND) --interval $(INTERVAL) $(if $(filter 1,$(GATE)),--gate,)
 
 stop:
+	@pkill -f "scripts/supervise.sh" || true
+	@sleep 1
 	@pkill -f "scripts/live.py" || true
 	@pkill -f "scripts/replay.py" || true
-	@echo "stopped"
+	@pkill -f "caffeinate -s bash scripts/supervise.sh" || true
+	@sleep 1
+	@if pgrep -f "scripts/live.py" >/dev/null; then echo "STILL RUNNING - check manually"; else echo "stopped"; fi
 
 logs:
 	@ls -t runs | head -1 | xargs -I{} tail -f runs/{}/decisions.jsonl

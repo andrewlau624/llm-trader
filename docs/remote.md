@@ -19,79 +19,47 @@ when the evidence said to take the model out of the entry decision.)
 ## Setup
 
 ```bash
-# on the server
 sudo adduser --disabled-password --gecos "" trader
 sudo -iu trader
 git clone https://github.com/andrewlau624/llm-trader /opt/llm-trader
 cd /opt/llm-trader
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+
+make setup     # venv + deps, creates .env from the example
+make env       # opens .env in nano: paste your Alpaca PAPER keys, save, exit
+make check     # verifies keys, data, priors and the risk budget
+make priors    # builds the measured priors table (once, ~5 minutes)
 ```
 
-Put the keys somewhere root-owned rather than in the repo:
-
-```bash
-sudo tee /etc/llm-trader.env >/dev/null <<'EOF'
-ALPACA_API_KEY=...
-ALPACA_SECRET_KEY=...
-EOF
-sudo chmod 600 /etc/llm-trader.env
-sudo chown root:root /etc/llm-trader.env
-```
-
-Set the server-side config. **Use Alpaca for data, not yfinance**: yfinance scrapes Yahoo and gets
-rate-limited or blocked from datacenter IPs. Alpaca's free IEX feed was measured against yfinance
-across a full session and agreed on 35 of 36 candidate directions with near-identical candidate
-counts, so the volume ratios the strategy depends on survive the narrower tape.
+Set the server-side config first, because **yfinance gets rate-limited from datacenter IPs**.
+Alpaca's free IEX feed was measured against yfinance across a full session and agreed on 35 of 36
+candidate directions with near-identical candidate counts, so the volume ratios the strategy
+depends on survive the narrower tape.
 
 ```yaml
-# config.yaml on the server
+# config.yaml
 data_source: alpaca
 strategy: deterministic
 basket: [SPY, QQQ, IWM, TQQQ]
-llm_gate: true
-```
-
-Build the priors file the rule needs, then verify:
-
-```bash
-.venv/bin/python scripts/study.py --granularity 5m --write-priors
-.venv/bin/python scripts/preflight.py
 ```
 
 ## Run it as a service
 
-```ini
-# /etc/systemd/system/llm-trader.service
-[Unit]
-Description=llm-trader deterministic paper loop
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=trader
-WorkingDirectory=/opt/llm-trader
-EnvironmentFile=/etc/llm-trader.env
-ExecStart=/opt/llm-trader/.venv/bin/python -u scripts/live.py \
-    --strategy deterministic --broker alpaca --notional-pct 100
-Restart=always
-RestartSec=30
-StandardOutput=append:/var/log/llm-trader.log
-StandardError=append:/var/log/llm-trader.log
-StateDirectory=llm-trader
-
-[Install]
-WantedBy=multi-user.target
-```
-
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now llm-trader
-journalctl -fu llm-trader
+make service          # installs the unit, enables it, starts it
+make service-logs     # follows the log
+make service-status
+make service-stop
+make uninstall        # removes it entirely
 ```
 
-`-u` is required: without it Python buffers stdout and the log stays empty for hours.
+`make service` fills in the clone path and your username from `deploy/llm-trader.service.in`, so it
+works wherever you cloned it. It reads `.env` from the clone (the `-` in `EnvironmentFile` means it
+starts even if that file is missing). If you would rather the keys live outside the repo for
+permissions reasons, edit `deploy/llm-trader.service.in` to point at `/etc/llm-trader.env` before
+installing.
+
+`-u` in the ExecStart is required: without it Python buffers stdout and the log stays empty for
+hours.
 
 ### Why a server is the right place for this
 

@@ -411,6 +411,17 @@ class AlpacaBroker:
 
     enter = submit
 
+    def open_order_summary(self):
+        from alpaca.trading.enums import QueryOrderStatus
+        from alpaca.trading.requests import GetOrdersRequest
+
+        try:
+            orders = self.client.get_orders(GetOrdersRequest(status=QueryOrderStatus.OPEN))
+        except Exception:
+            return []
+        return [{"symbol": str(o.symbol), "type": str(o.type), "side": str(o.side),
+                 "qty": str(o.qty), "status": str(o.status)} for o in orders]
+
     def cancel_open_orders(self):
         try:
             self.client.cancel_orders()
@@ -476,7 +487,14 @@ class AlpacaBroker:
         for order in self.client.get_orders(GetOrdersRequest(
             status=QueryOrderStatus.OPEN, symbols=[symbol]
         )):
-            if "stop" in str(order.type).lower():
+            otype = str(order.type).lower()
+            if "stop" in otype:
+                return None
+            if "market" in otype:
+                # A queued closing order is already on its way. Attaching a stop now would sit on
+                # a position that is about to disappear, and could over-close into a long.
+                self.events.append({"event": "protection_skipped_pending_close",
+                                    "symbol": symbol, "order_id": str(order.id)})
                 return None
         long_side = pos.side == "long"
         stop = round(pos.entry - atr, 2) if long_side else round(pos.entry + atr, 2)

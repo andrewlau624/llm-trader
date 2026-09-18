@@ -31,7 +31,7 @@ EQUITY   ?= 1000
 SYMBOLS  ?= SPY,QQQ,IWM,TQQQ
 
 .DEFAULT_GOAL := help
-.PHONY: help setup venv env check priors test lint \
+.PHONY: help setup venv env check priors test lint flat \
         week status week-report stop logs once paper live \
         study scan controls mc economics replay backtest report \
         service service-start service-stop service-status service-logs uninstall
@@ -50,6 +50,7 @@ help:
 	@echo "    make week         forward paper test, restarts itself if it dies"
 	@echo "    make status       running? what has it decided? what does it hold?"
 	@echo "    make week-report  execution cost and realized edge from the paper runs"
+	@echo "    make flat         close every open position and cancel its orders"
 	@echo "    make stop         stop everything"
 	@echo "    make logs         follow the log"
 	@echo ""
@@ -152,6 +153,9 @@ once:
 
 paper:
 	@$(PY) scripts/live.py --strategy deterministic --broker sim --notional-pct $(NOTIONAL)
+
+flat:
+	@$(PY) scripts/flat.py
 
 stop:
 	@pkill -f "scripts/supervise.sh" || true

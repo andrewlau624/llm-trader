@@ -1,4 +1,5 @@
 import json
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -36,7 +37,7 @@ def bracket_problems(action, stop, take_profit, base_price, tick=0.01):
 class AlpacaBroker:
     name = "alpaca"
 
-    def __init__(self, cfg, api_key=None, secret_key=None, account=None):
+    def __init__(self, cfg, api_key=None, secret_key=None, account=None, state_dir=None):
         from alpaca.trading.client import TradingClient
 
         from ..config import alpaca_keys
@@ -53,15 +54,20 @@ class AlpacaBroker:
         self.cfg = cfg
         self.book = account or LocalAccount(cfg.equity, authoritative_equity=True)
         from ..config import ROOT
+        from ..lock import account_fingerprint
 
-        self.state_path = Path(ROOT) / "state" / "book.json"
-        self._restore_state()
-        self._measured = set()
+        state_root = Path(state_dir) if state_dir else Path(ROOT) / "state"
+        self.account_fingerprint = account_fingerprint(self.api_key, self.secret_key)
+        self.state_path = state_root / f"book-{self.account_fingerprint}.json"
+        # Every attribute _restore_state() touches must exist before it is called. It previously
+        # ran before self.events existed, which made the constructor raise, so nothing could start.
         self.open_entry = None
         self.open_entries = {}
         self.trades = []
         self.events = []
+        self._measured = set()
         self._last_equity = None
+        self._restore_state()
 
     def _api_account(self):
         return self.client.get_account()
@@ -69,6 +75,8 @@ class AlpacaBroker:
     def _restore_state(self):
         if not self.state_path.exists():
             return
+        if not hasattr(self, "events"):
+            self.events = []
         try:
             self.book.restore(json.loads(self.state_path.read_text()))
             self.events.append({"event": "state_restored", "day": str(self.book.day),
@@ -411,11 +419,80 @@ class AlpacaBroker:
             self.events.append({"event": "cancel_orders_failed", "error": str(e)[:200]})
         self.open_entry = None
 
-    def close_all(self):
+    def flatten(self, symbols=None, reason="session_end", attempts=4):
+        """Close positions one symbol at a time, cancelling only that symbol's orders, then verify.
+
+        Deliberately NOT close_all_positions(cancel_orders=True): that cancels every order on the
+        account, so a second process running against the same account kills this one's closing
+        order. It did exactly that, and left a short open and unprotected overnight.
+        """
+        from alpaca.trading.enums import QueryOrderStatus
+        from alpaca.trading.requests import GetOrdersRequest
+
+        outcomes = []
+        for symbol in (symbols or self.symbols()):
+            if self._open_position(symbol) is None:
+                continue
+            for order in self.client.get_orders(GetOrdersRequest(
+                status=QueryOrderStatus.OPEN, symbols=[symbol]
+            )):
+                try:
+                    self.client.cancel_order_by_id(order.id)
+                except Exception as e:
+                    self.events.append({"event": "cancel_failed", "symbol": symbol,
+                                        "error": str(e)[:150]})
+            try:
+                self.client.close_position(symbol)
+            except Exception as e:
+                self.events.append({"event": "close_failed", "symbol": symbol, "reason": reason,
+                                    "error": str(e)[:200]})
+            flat = False
+            for _ in range(attempts):
+                time.sleep(1.5)
+                if self._open_position(symbol) is None:
+                    flat = True
+                    break
+            record = {"event": "flattened" if flat else "FLATTEN_FAILED", "symbol": symbol,
+                      "reason": reason, "ts": datetime.now(timezone.utc).isoformat()}
+            self.events.append(record)
+            outcomes.append(record)
+        return outcomes
+
+    def close_all(self, reason="session_end"):
+        return self.flatten(reason=reason)
+
+    def ensure_protection(self, symbol, atr, side=None):
+        """A position with no working stop is the one state that must never persist.
+
+        Happens after a restart, or after a cancelled stop as above. Re-attach a stop one ATR away
+        rather than trusting that someone will notice.
+        """
+        from alpaca.trading.enums import OrderSide, QueryOrderStatus, TimeInForce
+        from alpaca.trading.requests import GetOrdersRequest, StopOrderRequest
+
+        pos = self._open_position(symbol)
+        if pos is None or not atr:
+            return None
+        for order in self.client.get_orders(GetOrdersRequest(
+            status=QueryOrderStatus.OPEN, symbols=[symbol]
+        )):
+            if "stop" in str(order.type).lower():
+                return None
+        long_side = pos.side == "long"
+        stop = round(pos.entry - atr, 2) if long_side else round(pos.entry + atr, 2)
         try:
-            self.client.close_all_positions(cancel_orders=True)
+            order = self.client.submit_order(StopOrderRequest(
+                symbol=symbol, qty=pos.qty,
+                side=OrderSide.SELL if long_side else OrderSide.BUY,
+                time_in_force=TimeInForce.DAY, stop_price=stop,
+            ))
+            self.events.append({"event": "protection_reattached", "symbol": symbol,
+                                "stop": stop, "qty": pos.qty})
+            return order
         except Exception as e:
-            self.events.append({"event": "close_all_failed", "error": str(e)})
+            self.events.append({"event": "PROTECTION_FAILED", "symbol": symbol,
+                                "error": str(e)[:200]})
+            return None
 
     def account_state(self, price=None):
         try:

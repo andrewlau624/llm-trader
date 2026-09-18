@@ -158,6 +158,19 @@ def main(argv=None):
     client = None if deterministic else build_client(cfg)
     journal = Journal(cfg, symbol=symbol, mode="paper")
     broker = build_broker(args, cfg)
+    lock = None
+    if args.broker == "alpaca" and getattr(broker, "account_fingerprint", None):
+        from llmtrader.config import ROOT
+        from llmtrader.lock import AccountLock
+
+        lock = AccountLock(Path(ROOT) / "state" / f"live-{broker.account_fingerprint}.lock")
+        holder = lock.acquire()
+        if holder:
+            print("\n  REFUSING TO START: another live process is already trading this account.")
+            print(f"  {holder}")
+            print("  Two processes on one account cancel each other's orders. Stop the other")
+            print("  one first (make stop), or use a different account.\n")
+            return 1
     deterministic = args.strategy == "deterministic"
     engine = None
     priors = load_priors() if deterministic else None
@@ -241,9 +254,23 @@ def main(argv=None):
                 if args.broker == "alpaca"
                 else broker.snapshot(price)
             )
-            if args.broker == "alpaca" and broker.forced_exit_due(now, price):
-                print("  forced exit: position held past its time limit")
-                broker.close_all()
+            if args.broker == "alpaca":
+                due = broker.forced_exit_due(now, price)
+                if due:
+                    print(f"  forced exit ({due}): closing and verifying")
+                    for rec in broker.flatten(reason=due):
+                        journal.log_event(rec)
+                        if rec["event"] == "FLATTEN_FAILED":
+                            print(f"  *** COULD NOT CLOSE {rec['symbol']} - "
+                                  f"close it manually ***")
+                        else:
+                            print(f"  closed {rec['symbol']}")
+                for sym in (basket if deterministic else [symbol]):
+                    pos = broker._open_position(sym)
+                    if pos is not None and pos.stop is None:
+                        atr = price * 0.0025 if price else None
+                        if broker.ensure_protection(sym, atr):
+                            print(f"  {sym} had no stop - re-attached one")
             if deterministic:
                 bars_by_symbol = {}
                 for sym in basket:

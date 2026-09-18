@@ -185,3 +185,84 @@ def test_restore_tolerates_a_bad_state_file():
     assert acct.restore({"day": "not-a-date", "trades_today": 2}) is True
     assert acct.trades_today == 2
     assert acct.day is None
+
+
+def test_alpaca_constructor_initialises_before_restoring_state(monkeypatch, tmp_path):
+    """Regression: _restore_state ran before self.events existed, so the constructor raised and
+    no live process could start at all. Nothing caught it because the other tests bypass __init__."""
+    from alpaca.trading.client import TradingClient
+
+    from llmtrader.broker.alpaca import AlpacaBroker
+    from llmtrader.config import Config
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        def get_account(self):
+            return type("A", (), {"equity": "100000", "cash": "100000", "status": "ACTIVE"})()
+
+    monkeypatch.setattr(TradingClient, "__init__", FakeClient.__init__)
+    monkeypatch.setenv("ALPACA_API_KEY", "k")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "s")
+    cfg = Config()
+    cfg.symbols = ["SPY"]
+    broker = AlpacaBroker(cfg, state_dir=tmp_path)
+    assert broker.events == []
+    assert broker.book.day is None
+    assert broker.state_path.parent == tmp_path
+    assert broker.state_path.name.startswith("book-")
+
+
+def test_account_lock_refuses_a_second_holder(tmp_path):
+    """The bug that cost a stop order: two live loops on one account, each cancelling the other's
+    orders at the session-end close."""
+    from llmtrader.lock import AccountLock
+
+    path = tmp_path / "live.lock"
+    first = AccountLock(path)
+    assert first.acquire() is None
+    second = AccountLock(path)
+    holder = second.acquire()
+    assert holder is not None and "held by" in holder
+    first.release()
+    third = AccountLock(path)
+    assert third.acquire() is None
+    third.release()
+
+
+def test_account_fingerprint_distinguishes_accounts():
+    from llmtrader.lock import account_fingerprint
+
+    a = account_fingerprint("key-a", "secret")
+    assert a == account_fingerprint("key-a", "secret")
+    assert a != account_fingerprint("key-b", "secret")
+    assert "key-a" not in a
+
+
+def test_state_file_is_per_account_and_isolated(tmp_path):
+    from alpaca.trading.client import TradingClient
+
+    from llmtrader.broker.alpaca import AlpacaBroker
+    from llmtrader.config import Config
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+    orig = TradingClient.__init__
+    TradingClient.__init__ = FakeClient.__init__
+    try:
+        import os
+
+        os.environ["ALPACA_API_KEY"] = "k1"
+        os.environ["ALPACA_SECRET_KEY"] = "s1"
+        cfg = Config()
+        cfg.symbols = ["SPY"]
+        b1 = AlpacaBroker(cfg, api_key="k1", secret_key="s1", state_dir=tmp_path)
+        b2 = AlpacaBroker(cfg, api_key="k2", secret_key="s2", state_dir=tmp_path)
+        assert b1.state_path != b2.state_path
+        assert b1.state_path.parent == tmp_path
+        assert b1.events == []
+    finally:
+        TradingClient.__init__ = orig

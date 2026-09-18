@@ -411,6 +411,44 @@ class AlpacaBroker:
 
     enter = submit
 
+    def orders_for(self, symbol):
+        from alpaca.trading.enums import QueryOrderStatus
+        from alpaca.trading.requests import GetOrdersRequest
+
+        try:
+            return self.client.get_orders(GetOrdersRequest(
+                status=QueryOrderStatus.OPEN, symbols=[symbol]
+            ))
+        except Exception:
+            return []
+
+    def unprotected_positions(self):
+        """Positions with neither a working stop nor a pending close.
+
+        The one state that must never persist overnight, and the one thing that cannot be fixed
+        while the market is shut - so it has to be detected and re-armed as soon as a process is
+        alive, not only during the session.
+        """
+        out = []
+        for symbol in self.symbols():
+            if self._open_position(symbol) is None:
+                continue
+            types = [str(o.type).lower() for o in self.orders_for(symbol)]
+            if not any("stop" in t for t in types) and not any("market" in t for t in types):
+                out.append(symbol)
+        return out
+
+    def position_report(self):
+        rows = []
+        for p in self.client.get_all_positions():
+            orders = [str(o.type) for o in self.orders_for(p.symbol)]
+            rows.append({
+                "symbol": p.symbol, "qty": p.qty, "entry": p.avg_entry_price,
+                "unrealized": p.unrealized_pl, "orders": orders,
+                "protected": any("Stop" in o for o in orders) or any("Market" in o for o in orders),
+            })
+        return rows
+
     def open_order_summary(self):
         from alpaca.trading.enums import QueryOrderStatus
         from alpaca.trading.requests import GetOrdersRequest

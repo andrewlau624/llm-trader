@@ -286,3 +286,53 @@ def test_service_unit_lets_journald_capture_output():
     unit = Path("deploy/llm-trader.service.in").read_text()
     assert "StandardOutput=append:" not in unit
     assert "StandardError=append:" not in unit
+
+
+def test_unprotected_positions_flags_a_naked_holding(tmp_path):
+    """The state that must never survive a session boundary: open position, no stop, no close."""
+    from alpaca.trading.client import TradingClient
+
+    from llmtrader.broker.alpaca import AlpacaBroker
+    from llmtrader.config import Config
+
+    class FakePos:
+        symbol = "TQQQ"
+        qty = "-1398"
+        avg_entry_price = "71.45"
+        unrealized_pl = "-1269"
+
+    class FakeOrder:
+        def __init__(self, t):
+            self.type = t
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            self.orders = []
+
+        def get_open_position(self, symbol):
+            return FakePos()
+
+        def get_orders(self, req=None):
+            return self.orders
+
+    monkeypatch_attr = None
+    orig = TradingClient.__init__
+    TradingClient.__init__ = FakeClient.__init__
+    try:
+        import os
+
+        os.environ["ALPACA_API_KEY"] = "k"
+        os.environ["ALPACA_SECRET_KEY"] = "s"
+        cfg = Config()
+        cfg.symbols = ["TQQQ"]
+        b = AlpacaBroker(cfg, state_dir=tmp_path)
+        b.client.orders = []
+        assert b.unprotected_positions() == ["TQQQ"]
+        b.client.orders = [FakeOrder("OrderType.MARKET")]
+        assert b.unprotected_positions() == []
+        b.client.orders = [FakeOrder("OrderType.STOP")]
+        assert b.unprotected_positions() == []
+        monkeypatch_attr = b.client.orders
+        assert monkeypatch_attr is not None
+    finally:
+        TradingClient.__init__ = orig

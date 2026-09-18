@@ -214,9 +214,32 @@ def main(argv=None):
     if pump:
         pump.prime()
 
+    reported = False
     while True:
         now = datetime.now(timezone.utc)
+        if args.broker == "alpaca":
+            # Runs even when the market is shut. A position with no stop and no pending close is
+            # the one state that must never survive a session boundary, and it can only be
+            # detected and re-armed while a process is alive.
+            for row in broker.position_report():
+                if not row["protected"]:
+                    print(f"  UNPROTECTED {row['symbol']} qty {row['qty']} "
+                          f"unrealized {row['unrealized']} - no stop, no closing order")
+            for sym in broker.unprotected_positions():
+                try:
+                    px = broker.live_price(sym) or 0
+                except Exception:
+                    px = 0
+                if px and broker.ensure_protection(sym, round(px * 0.0025, 4)):
+                    print(f"  {sym} had no protection - stop re-attached for the next open")
+                else:
+                    print(f"  *** {sym} IS UNPROTECTED AND COULD NOT BE RE-ARMED ***")
         if not market_open(now) and not args.force:
+            if not reported:
+                for row in (broker.position_report() if args.broker == "alpaca" else []):
+                    print(f"  holding {row['symbol']} qty {row['qty']} "
+                          f"unrealized {row['unrealized']} protection={row['orders']}")
+                reported = True
             et = now.astimezone(ET)
             sleep_s = sleep_until_open(now)
             print(f"{et:%H:%M} ET market closed, sleeping {sleep_s / 60:.0f}m")

@@ -170,7 +170,7 @@ def main(argv=None):
             print(f"  {holder}")
             print("  Two processes on one account cancel each other's orders. Stop the other")
             print("  one first (make stop), or use a different account.\n")
-            return 1
+            return 2
     deterministic = args.strategy == "deterministic"
     engine = None
     priors = load_priors() if deterministic else None

@@ -14,6 +14,8 @@ ExecStart=__APP_DIR__/.venv/bin/python -u scripts/live.py \
     --strategy deterministic --broker alpaca --notional-pct 100
 Restart=always
 RestartSec=30
+# exit 2 means "another process owns this account". Restarting would just loop; stop instead.
+RestartPreventExitStatus=2
 StandardOutput=append:/tmp/llmtrader-live.log
 StandardError=append:/tmp/llmtrader-live.log
 

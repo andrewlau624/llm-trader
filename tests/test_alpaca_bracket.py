@@ -266,3 +266,13 @@ def test_state_file_is_per_account_and_isolated(tmp_path):
         assert b1.events == []
     finally:
         TradingClient.__init__ = orig
+
+
+def test_service_unit_prevents_a_restart_loop_on_lock_conflict():
+    """Restart=always plus exit-on-lock-conflict would spin forever. The unit must stop instead."""
+    from pathlib import Path
+
+    unit = Path("deploy/llm-trader.service.in").read_text()
+    assert "RestartPreventExitStatus=2" in unit
+    live = Path("scripts/live.py").read_text()
+    assert "return 2" in live

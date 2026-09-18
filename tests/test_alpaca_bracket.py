@@ -325,6 +325,8 @@ def test_unprotected_positions_flags_a_naked_holding():
     broker = AlpacaBroker.__new__(AlpacaBroker)
     broker.cfg = cfg
     broker.events = []
+    broker.open_entries = {}
+    broker.open_entry = None
 
     broker.client = FakeClient([])
     assert broker.unprotected_positions() == ["TQQQ"]

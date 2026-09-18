@@ -172,14 +172,15 @@ service:
 	@sed -e "s|__APP_DIR__|$(APP_DIR)|g" -e "s|__USER__|$$(id -un)|g" \
 		deploy/llm-trader.service.in | sudo tee /etc/systemd/system/$(SERVICE).service >/dev/null
 	@sudo systemctl daemon-reload
-	@sudo systemctl enable --now $(SERVICE)
-	@echo "  installed and started.  make service-logs"
+	@sudo systemctl enable $(SERVICE) >/dev/null 2>&1 || true
+	@sudo systemctl restart $(SERVICE)
+	@echo "  installed and (re)started.  make service-logs"
 
 service-logs:
 	@sudo journalctl -fu $(SERVICE)
 
 service-status:
-	@systemctl status $(SERVICE) --no-pager | head -12
+	@systemctl status $(SERVICE) --no-pager | head -14
 
 service-start:
 	@sudo systemctl start $(SERVICE)

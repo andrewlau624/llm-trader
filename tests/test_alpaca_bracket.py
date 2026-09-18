@@ -276,3 +276,13 @@ def test_service_unit_prevents_a_restart_loop_on_lock_conflict():
     assert "RestartPreventExitStatus=2" in unit
     live = Path("scripts/live.py").read_text()
     assert "return 2" in live
+
+
+def test_service_unit_lets_journald_capture_output():
+    """Redirecting stdout to a file made `make service-logs` show nothing but systemd noise,
+    which is how you spend a week unable to see what the bot decided."""
+    from pathlib import Path
+
+    unit = Path("deploy/llm-trader.service.in").read_text()
+    assert "StandardOutput=append:" not in unit
+    assert "StandardError=append:" not in unit

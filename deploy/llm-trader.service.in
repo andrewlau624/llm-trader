@@ -16,8 +16,9 @@ Restart=always
 RestartSec=30
 # exit 2 means "another process owns this account". Restarting would just loop; stop instead.
 RestartPreventExitStatus=2
-StandardOutput=append:/tmp/llmtrader-live.log
-StandardError=append:/tmp/llmtrader-live.log
+# No StandardOutput redirect: Python's output goes to journald, so `make service-logs` shows the
+# actual decisions. Redirecting it to a file made journalctl look empty, which is how you end up
+# flying blind for a week.
 
 [Install]
 WantedBy=multi-user.target

@@ -288,10 +288,12 @@ def test_service_unit_lets_journald_capture_output():
     assert "StandardError=append:" not in unit
 
 
-def test_unprotected_positions_flags_a_naked_holding(tmp_path):
-    """The state that must never survive a session boundary: open position, no stop, no close."""
-    from alpaca.trading.client import TradingClient
+def test_unprotected_positions_flags_a_naked_holding():
+    """The state that must never survive a session boundary: open position, no stop, no close.
 
+    Built with __new__ rather than patching __init__, because patching only the constructor leaves
+    the real API methods in place and the test then talks to Alpaca.
+    """
     from llmtrader.broker.alpaca import AlpacaBroker
     from llmtrader.config import Config
 
@@ -306,8 +308,8 @@ def test_unprotected_positions_flags_a_naked_holding(tmp_path):
             self.type = t
 
     class FakeClient:
-        def __init__(self, *a, **k):
-            self.orders = []
+        def __init__(self, orders):
+            self.orders = orders
 
         def get_open_position(self, symbol):
             return FakePos()
@@ -315,24 +317,22 @@ def test_unprotected_positions_flags_a_naked_holding(tmp_path):
         def get_orders(self, req=None):
             return self.orders
 
-    monkeypatch_attr = None
-    orig = TradingClient.__init__
-    TradingClient.__init__ = FakeClient.__init__
-    try:
-        import os
+        def get_all_positions(self):
+            return [FakePos()]
 
-        os.environ["ALPACA_API_KEY"] = "k"
-        os.environ["ALPACA_SECRET_KEY"] = "s"
-        cfg = Config()
-        cfg.symbols = ["TQQQ"]
-        b = AlpacaBroker(cfg, state_dir=tmp_path)
-        b.client.orders = []
-        assert b.unprotected_positions() == ["TQQQ"]
-        b.client.orders = [FakeOrder("OrderType.MARKET")]
-        assert b.unprotected_positions() == []
-        b.client.orders = [FakeOrder("OrderType.STOP")]
-        assert b.unprotected_positions() == []
-        monkeypatch_attr = b.client.orders
-        assert monkeypatch_attr is not None
-    finally:
-        TradingClient.__init__ = orig
+    cfg = Config()
+    cfg.symbols = ["TQQQ"]
+    broker = AlpacaBroker.__new__(AlpacaBroker)
+    broker.cfg = cfg
+    broker.events = []
+
+    broker.client = FakeClient([])
+    assert broker.unprotected_positions() == ["TQQQ"]
+    assert broker.position_report()[0]["protected"] is False
+
+    broker.client = FakeClient([FakeOrder("OrderType.MARKET")])
+    assert broker.unprotected_positions() == []
+    assert broker.position_report()[0]["protected"] is True
+
+    broker.client = FakeClient([FakeOrder("OrderType.STOP")])
+    assert broker.unprotected_positions() == []

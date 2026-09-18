@@ -442,10 +442,15 @@ class AlpacaBroker:
         rows = []
         for p in self.client.get_all_positions():
             orders = [str(o.type) for o in self.orders_for(p.symbol)]
+            # Alpaca reports these as "OrderType.STOP" / "OrderType.MARKET" - uppercase. Matching
+            # on "Market" made this flag permanently False, so every startup would have warned
+            # about an unprotected position that was in fact protected.
+            lowered = [o.lower() for o in orders]
             rows.append({
                 "symbol": p.symbol, "qty": p.qty, "entry": p.avg_entry_price,
                 "unrealized": p.unrealized_pl, "orders": orders,
-                "protected": any("Stop" in o for o in orders) or any("Market" in o for o in orders),
+                "protected": any("stop" in o for o in lowered)
+                or any("market" in o for o in lowered),
             })
         return rows
 
